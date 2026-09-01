@@ -1,5 +1,6 @@
 import sys
 import os
+
 # Garante que o Python encontre a pasta bot durante a execução
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -28,7 +29,7 @@ except Exception as e:
 DB_PATH = "data/news.db"
 TIMEOUT = 20
 
-# Força conexões brutas a desistirem se o site demorar mais de 15 segundos
+# Força o feedparser e conexões brutas a desistirem se o site demorar mais de 15 segundos
 socket.setdefaulttimeout(15)
 
 # Mude para False depois que o primeiro post aparecer no WordPress!
@@ -54,7 +55,7 @@ def fingerprint(title, url):
 
 def already_seen(conn, fp):
     if TEST_MODE:
-        return False  # Ignora o banco de dados durante os testes de validação
+        return False
     return conn.execute(
         "SELECT 1 FROM processed WHERE fingerprint=?", (fp,)
     ).fetchone() is not None
@@ -141,7 +142,7 @@ def gemini(prompt):
     
     text_response = ""
     try:
-        text_response = data["candidates"]["content"]["parts"]["text"].strip()
+        text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError, TypeError):
         try:
             text_response = data["candidates"]["content"]["parts"]["text"].strip()
@@ -267,7 +268,7 @@ def main():
     try:
         conn = db()
     except Exception as e:
-        print(f"[CRITICAL] Parando execução: Falha crítica ao inicializar banco de dados.")
+        print("[CRITICAL] Parando execução: Falha crítica ao inicializar banco de dados.")
         return
 
     try:
@@ -300,3 +301,5 @@ def main():
             break
 
         print(f"[INFO] Analisando: {item['title']}")
+        source_text = page_extract(item["url"])
+        
