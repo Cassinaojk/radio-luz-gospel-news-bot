@@ -2,9 +2,9 @@ name: Executar Robô de Notícias
 
 on:
   schedule:
-    - cron: '0 9 * * *'   # 06:00 BRT
-    - cron: '0 15 * * *'  # 12:00 BRT
-    - cron: '0 21 * * *'  # 18:00 BRT
+    - cron: '0 9 * * *'
+    - cron: '0 15 * * *'
+    - cron: '0 21 * * *'
   workflow_dispatch:      
 
 jobs:
@@ -24,10 +24,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Executar o Robô
+      - name: Executar o Robô com Relatório
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python bot/main.py
+        run: |
+          python bot/main.py 2>&1 | tee log_erro.txt
+          
+      - name: Guardar relatório se der erro
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-de-execucao
+          path: log_erro.txt
