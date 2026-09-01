@@ -1,5 +1,5 @@
 import sys
-import os
+import os  # <-- ADICIONE ESTA LINHA AQUI!
 # Garante que o Python encontre a pasta bot durante a execução
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
