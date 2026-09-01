@@ -9,6 +9,7 @@ import html
 import json
 import re
 import sqlite3
+import socket
 from datetime import datetime, timezone
 
 import feedparser
@@ -21,7 +22,10 @@ from config import (
 )
 
 DB_PATH = "data/news.db"
-TIMEOUT = 25
+TIMEOUT = 20
+
+# Força o feedparser e conexões brutas a desistirem se o site demorar mais de 15 segundos
+socket.setdefaulttimeout(15)
 
 # Mude para False depois que o primeiro post aparecer no WordPress!
 TEST_MODE = True
@@ -63,23 +67,24 @@ def clean_text(value):
 
 def collect():
     items = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    
     for category, feed_url in RSS_FEEDS:
         try:
-            print(f"[INFO] Lendo feed: {feed_url}")
-            feed = feedparser.parse(feed_url)
+            print(f"[INFO] Baixando conteúdo do feed: {feed_url}")
+            # Baixa o conteúdo usando requests primeiro com timeout rígido para evitar congelamento
+            r = requests.get(feed_url, timeout=TIMEOUT, headers=headers)
+            if r.status_code >= 400:
+                print(f"[WARN] Feed retornou status {r.status_code}. Pulando.")
+                continue
+                
+            feed = feedparser.parse(r.content)
+            print(f"[INFO] Sucesso! Encontrados {len(feed.entries)} itens no feed.")
             
-            # Se o feed retornar vazio, tenta dar um fallback baixando via requests
-            if not feed.entries:
-                r = requests.get(feed_url, timeout=TIMEOUT, headers={"User-Agent": "Mozilla/5.0"})
-                feed = feedparser.parse(r.content)
-
-            print(f"[INFO] Encontrados {len(feed.entries)} itens no feed.")
             for e in feed.entries[:12]:
                 title = clean_text(e.get("title", ""))
                 url = e.get("link", "")
-                summary = clean_text(
-                    e.get("summary", "") or e.get("description", "")
-                )
+                summary = clean_text(e.get("summary", "") or e.get("description", ""))
                 if title and url:
                     items.append({
                         "category": category,
@@ -89,14 +94,14 @@ def collect():
                         "published": e.get("published", "") or e.get("updated", "")
                     })
         except Exception as exc:
-            print(f"[WARN] RSS {feed_url}: {exc}")
+            print(f"[WARN] Erro ao ler RSS {feed_url}: {exc}")
     return items
 
 def page_extract(url):
     try:
         r = requests.get(
             url, timeout=TIMEOUT,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         )
         if r.status_code >= 400:
             return ""
@@ -113,7 +118,7 @@ def page_extract(url):
 
 def gemini(prompt):
     endpoint = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"https://googleapis.com"
         f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     )
     payload = {
@@ -127,7 +132,6 @@ def gemini(prompt):
     r.raise_for_status()
     data = r.json()
     
-    # Extrai o texto limpando possíveis marcações markdown do JSON
     text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
     if text_response.startswith("```json"):
         text_response = text_response.replace("```json", "", 1).rstrip("```").strip()
@@ -166,7 +170,7 @@ Retorne SOMENTE JSON válido, sem blocos de markdown:
   "excerpt": "...",
   "content": "<p>...</p>",
   "tags": ["tag1","tag2"],
-  "category": "Brasil"
+  "category": "Gospel"
 }}
 
 Material:
@@ -207,7 +211,6 @@ def get_or_create_category(name):
                 return c["id"]
         return wp_post("categories", {"name": name})["id"]
     except Exception:
-        # Se falhar ao criar categoria, tenta retornar uma categoria padrão (Geral ID 1)
         return 1
 
 def get_or_create_tags(names):
