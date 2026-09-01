@@ -1,5 +1,5 @@
 import sys
-import os  # <-- ADICIONE ESTA LINHA AQUI!
+import os
 # Garante que o Python encontre a pasta bot durante a execução
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
@@ -16,10 +16,14 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
-from config import (
-    WP_URL, WP_USERNAME, WP_APP_PASSWORD, GEMINI_API_KEY, GEMINI_MODEL,
-    WP_POST_STATUS, ARTICLES_PER_RUN, RSS_FEEDS
-)
+try:
+    from config import (
+        WP_URL, WP_USERNAME, WP_APP_PASSWORD, GEMINI_API_KEY, GEMINI_MODEL,
+        WP_POST_STATUS, ARTICLES_PER_RUN, RSS_FEEDS
+    )
+except Exception as e:
+    print(f"[CRITICAL] Erro fatal ao carregar o arquivo config.py: {e}")
+    sys.exit(1)
 
 DB_PATH = "data/news.db"
 TIMEOUT = 20
@@ -31,14 +35,18 @@ socket.setdefaulttimeout(15)
 TEST_MODE = True
 
 def db():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS processed ("
-        "fingerprint TEXT PRIMARY KEY, source_url TEXT, title TEXT, "
-        "created_at TEXT, wp_post_id INTEGER)"
-    )
-    return conn
+    try:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS processed ("
+            "fingerprint TEXT PRIMARY KEY, source_url TEXT, title TEXT, "
+            "created_at TEXT, wp_post_id INTEGER)"
+        )
+        return conn
+    except Exception as e:
+        print(f"[CRITICAL] Erro ao criar ou abrir o banco de dados sqlite3: {e}")
+        raise e
 
 def fingerprint(title, url):
     raw = re.sub(r"\W+", " ", (title or "").lower()).strip() + "|" + (url or "")
@@ -131,19 +139,15 @@ def gemini(prompt):
     r.raise_for_status()
     data = r.json()
     
-    # Sistema de leitura inteligente compatível com a versão antiga e nova da API
     text_response = ""
     try:
-        # Tenta o formato padrão (Lista estruturada)
         text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError, TypeError):
         try:
-            # Tenta o formato alternativo simplificado
             text_response = data["candidates"]["content"]["parts"]["text"].strip()
         except Exception:
             raise ValueError(f"Não foi possível ler a estrutura da API do Gemini. Resposta recebida: {data}")
     
-    # Limpeza de possíveis formatações de bloco markdown do JSON
     text_response = re.sub(r"^```json\s*", "", text_response, flags=re.IGNORECASE)
     text_response = re.sub(r"^```\s*", "", text_response, flags=re.IGNORECASE)
     text_response = re.sub(r"\s*```$", "", text_response, flags=re.IGNORECASE)
@@ -167,7 +171,7 @@ REGRAS:
 - Não copie frases da fonte.
 - Não faça simples troca de sinônimos ou paráfrase linha a linha.
 - Não invente nomes, números, datas, declarações ou acontecimentos.
-- Não crie citações. Preserve a atribuição de declarações existentes.
+- Não crie citações. Preserve a attribution de declarações existentes.
 - Se o material for insuficiente ou contraditório, use publish=false.
 - Crie título próprio.
 - Escreva entre 350 e 650 palavras.
@@ -260,19 +264,31 @@ def publish(article, item):
     return wp_post("posts", payload)
 
 def main():
-    conn = db()
+    try:
+        conn = db()
+    except Exception as e:
+        print(f"[CRITICAL] Parando execução: Falha crítica ao inicializar banco de dados.")
+        return
+
+    try:
+        collected_items = collect()
+        print(f"[INFO] Total de notícias coletadas nos feeds: {len(collected_items)}")
+    except Exception as e:
+        print(f"[CRITICAL] Erro fatal durante a coleta de notícias dos feeds: {e}")
+        return
+
+    if not collected_items:
+        print("[INFO] Nenhum item retornado pelos feeds configurados.")
+        return
+
     candidates = []
-
-    collected_items = collect()
-    print(f"[INFO] Total de notícias coletadas nos feeds: {len(collected_items)}")
-
     for item in collected_items:
         fp = fingerprint(item["title"], item["url"])
         if not already_seen(conn, fp):
             candidates.append((fp, item))
 
     if not candidates:
-        print("[INFO] Nenhuma notícia nova encontrada.")
+        print("[INFO] Nenhuma notícia nova encontrada após filtragem de histórico.")
         return
 
     print(f"[INFO] {len(candidates)} notícias candidatas prontas para processamento.")
@@ -284,17 +300,3 @@ def main():
             break
 
         print(f"[INFO] Analisando: {item['title']}")
-        source_text = page_extract(item["url"])
-        
-        if not source_text:
-            print("[WARN] Não foi possível extrair o texto da página original. Pulando.")
-            continue
-
-        try:
-            article = generate_article(item, source_text)
-        except Exception as exc:
-            print(f"[ERROR] Geração Gemini: {exc}")
-            continue
-
-        if not article.get("publish"):
-            print("[INFO] Conteúdo insuficiente segundo o Gemini; não publicar.")
