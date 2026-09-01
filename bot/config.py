@@ -7,13 +7,13 @@ WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD")
 
 # Configurações do Gemini
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+GEMINI_MODEL = "gemini-1.5-flash"
 
 # Configurações de Postagem
-WP_POST_STATUS = "draft"  # Salva como rascunho.
+WP_POST_STATUS = "draft"  # Salva como rascunho
 ARTICLES_PER_RUN = 3
 
-# Usando apenas uma fonte estável para o teste definitivo
+# Testando agora unicamente com a URL do Fuxico Gospel
 RSS_FEEDS = [
-    ("Gospel", "https://uaugospel.com.br")
+    ("Gospel", "https://fuxicogospel.com.br")
 ]
