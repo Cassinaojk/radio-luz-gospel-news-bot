@@ -28,7 +28,7 @@ except Exception as e:
 DB_PATH = "data/news.db"
 TIMEOUT = 20
 
-# Força o feedparser e conexões brutas a desistirem se o site demorar mais de 15 segundos
+# Força conexões brutas a desistirem se o site demorar mais de 15 segundos
 socket.setdefaulttimeout(15)
 
 # Mude para False depois que o primeiro post aparecer no WordPress!
@@ -141,7 +141,7 @@ def gemini(prompt):
     
     text_response = ""
     try:
-        text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        text_response = data["candidates"]["content"]["parts"]["text"].strip()
     except (KeyError, IndexError, TypeError):
         try:
             text_response = data["candidates"]["content"]["parts"]["text"].strip()
@@ -171,7 +171,7 @@ REGRAS:
 - Não copie frases da fonte.
 - Não faça simples troca de sinônimos ou paráfrase linha a linha.
 - Não invente nomes, números, datas, declarações ou acontecimentos.
-- Não crie citações. Preserve a attribution de declarações existentes.
+- Não crie citações. Preserve a atribuição de declarações existentes.
 - Se o material for insuficiente ou contraditório, use publish=false.
 - Crie título próprio.
 - Escreva entre 350 e 650 palavras.
