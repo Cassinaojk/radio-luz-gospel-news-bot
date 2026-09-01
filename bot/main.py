@@ -1,9 +1,5 @@
 import sys
 import os
-
-# Garante que o Python encontre a pasta bot durante a execução
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 import base64
 import hashlib
 import html
@@ -17,37 +13,40 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
-try:
-    from config import (
-        WP_URL, WP_USERNAME, WP_APP_PASSWORD, GEMINI_API_KEY, GEMINI_MODEL,
-        WP_POST_STATUS, ARTICLES_PER_RUN, RSS_FEEDS
-    )
-except Exception as e:
-    print(f"[CRITICAL] Erro fatal ao carregar o arquivo config.py: {e}")
-    sys.exit(1)
+# Configurações do WordPress e Gemini embutidas diretamente (Puxando dos Secrets)
+WP_URL = os.getenv("WP_URL")
+WP_USERNAME = os.getenv("WP_USERNAME")
+WP_APP_PASSWORD = os.getenv("WP_APP_PASSWORD")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = "gemini-1.5-flash"
+
+# Configurações de Postagem
+WP_POST_STATUS = "draft"  # Salva como rascunho
+ARTICLES_PER_RUN = 3
+
+# Link único do Fuxico Gospel para o teste definitivo
+RSS_FEEDS = [
+    ("Gospel", "https://fuxicogospel.com.br")
+]
 
 DB_PATH = "data/news.db"
 TIMEOUT = 20
 
-# Força o feedparser e conexões brutas a desistirem se o site demorar mais de 15 segundos
+# Força conexões brutas a desistirem se o site demorar mais de 15 segundos
 socket.setdefaulttimeout(15)
 
-# Mude para False depois que o primeiro post aparecer no WordPress!
+# Força o robô a ignorar o banco de dados durante os testes de validação
 TEST_MODE = True
 
 def db():
-    try:
-        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS processed ("
-            "fingerprint TEXT PRIMARY KEY, source_url TEXT, title TEXT, "
-            "created_at TEXT, wp_post_id INTEGER)"
-        )
-        return conn
-    except Exception as e:
-        print(f"[CRITICAL] Erro ao criar ou abrir o banco de dados sqlite3: {e}")
-        raise e
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS processed ("
+        "fingerprint TEXT PRIMARY KEY, source_url TEXT, title TEXT, "
+        "created_at TEXT, wp_post_id INTEGER)"
+    )
+    return conn
 
 def fingerprint(title, url):
     raw = re.sub(r"\W+", " ", (title or "").lower()).strip() + "|" + (url or "")
@@ -80,14 +79,16 @@ def collect():
     
     for category, feed_url in RSS_FEEDS:
         try:
-            print(f"[INFO] Baixando conteúdo do feed: {feed_url}")
+            print(f"[PROCESS] Iniciando leitura do feed: {feed_url}")
             r = requests.get(feed_url, timeout=TIMEOUT, headers=headers)
+            print(f"[PROCESS] Resposta do site do feed obtida. Status: {r.status_code}")
+            
             if r.status_code >= 400:
-                print(f"[WARN] Feed retornou status {r.status_code}. Pulando.")
+                print(f"[WARN] O feed retornou um erro do servidor {r.status_code}.")
                 continue
                 
             feed = feedparser.parse(r.content)
-            print(f"[INFO] Sucesso! Encontrados {len(feed.entries)} itens no feed.")
+            print(f"[PROCESS] Total de notícias encontradas no feed: {len(feed.entries)}")
             
             for e in feed.entries[:12]:
                 title = clean_text(e.get("title", ""))
@@ -102,7 +103,7 @@ def collect():
                         "published": e.get("published", "") or e.get("updated", "")
                     })
         except Exception as exc:
-            print(f"[WARN] Erro ao ler RSS {feed_url}: {exc}")
+            print(f"[WARN] Falha ao decodificar feed {feed_url}: {exc}")
     return items
 
 def page_extract(url):
@@ -121,7 +122,7 @@ def page_extract(url):
             return ""
         return re.sub(r"\s+", " ", target.get_text(" ", strip=True))[:12000]
     except Exception as exc:
-        print(f"[WARN] Página {url}: {exc}")
+        print(f"[WARN] Falha ao extrair texto da página {url}: {exc}")
         return ""
 
 def gemini(prompt):
@@ -144,10 +145,7 @@ def gemini(prompt):
     try:
         text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
     except (KeyError, IndexError, TypeError):
-        try:
-            text_response = data["candidates"]["content"]["parts"]["text"].strip()
-        except Exception:
-            raise ValueError(f"Não foi possível ler a estrutura da API do Gemini. Resposta recebida: {data}")
+        raise ValueError(f"Estrutura de resposta inesperada da API do Gemini.")
     
     text_response = re.sub(r"^```json\s*", "", text_response, flags=re.IGNORECASE)
     text_response = re.sub(r"^```\s*", "", text_response, flags=re.IGNORECASE)
@@ -165,8 +163,7 @@ def generate_article(item, source_text):
 
     prompt = f'''
 Você é editor de um portal chamado Rádio Luz Gospel.
-Produza UMA reportagem original em português do Brasil usando somente os fatos
-do material abaixo.
+Produza UMA reportagem original em português do Brasil usando somente os fatos do material abaixo.
 
 REGRAS:
 - Não copie frases da fonte.
@@ -215,7 +212,7 @@ def wp_post(path, payload):
         json=payload, timeout=TIMEOUT
     )
     if r.status_code >= 400:
-        print("[ERROR] WordPress:", r.text[:2000])
+        print("[ERROR] Erro na API do WordPress:", r.text[:2000])
     r.raise_for_status()
     return r.json()
 
@@ -265,21 +262,14 @@ def publish(article, item):
     return wp_post("posts", payload)
 
 def main():
-    try:
-        conn = db()
-    except Exception as e:
-        print("[CRITICAL] Parando execução: Falha crítica ao inicializar banco de dados.")
-        return
+    print("[START] Inicializando o Robô de Notícias da Rádio Luz Gospel...")
+    conn = db()
 
-    try:
-        collected_items = collect()
-        print(f"[INFO] Total de notícias coletadas nos feeds: {len(collected_items)}")
-    except Exception as e:
-        print(f"[CRITICAL] Erro fatal durante a coleta de notícias dos feeds: {e}")
-        return
+    collected_items = collect()
+    print(f"[INFO] Total de notícias coletadas nos feeds: {len(collected_items)}")
 
     if not collected_items:
-        print("[INFO] Nenhum item retornado pelos feeds configurados.")
+        print("[INFO] Nenhum item retornado pelo feed do Fuxico Gospel.")
         return
 
     candidates = []
@@ -288,11 +278,7 @@ def main():
         if not already_seen(conn, fp):
             candidates.append((fp, item))
 
-    if not candidates:
-        print("[INFO] Nenhuma notícia nova encontrada após filtragem de histórico.")
-        return
-
-    print(f"[INFO] {len(candidates)} notícias candidatas prontas para processamento.")
+    print(f"[INFO] {len(candidates)} notícias prontas para processamento.")
     candidates = candidates[:max(ARTICLES_PER_RUN * 5, 5)]
     published = 0
 
@@ -300,6 +286,17 @@ def main():
         if published >= ARTICLES_PER_RUN:
             break
 
-        print(f"[INFO] Analisando: {item['title']}")
+        print(f"[INFO] Processando notícia: {item['title']}")
         source_text = page_extract(item["url"])
         
+        if not source_text:
+            print("[WARN] Texto da página original veio em branco. Pulando.")
+            continue
+
+        try:
+            print("[INFO] Enviando material para o Google Gemini...")
+            article = generate_article(item, source_text)
+        except Exception as exc:
+            print(f"[ERROR] O Google Gemini falhou ao reescrever esta notícia: {exc}")
+            continue
+
