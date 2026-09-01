@@ -1,3 +1,8 @@
+import sys
+import os
+# Garante que o Python encontre a pasta bot durante a execução
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import base64
 import hashlib
 import html
@@ -10,7 +15,7 @@ import feedparser
 import requests
 from bs4 import BeautifulSoup
 
-from .config import (
+from config import (
     WP_URL, WP_USERNAME, WP_APP_PASSWORD, GEMINI_API_KEY, GEMINI_MODEL,
     WP_POST_STATUS, ARTICLES_PER_RUN, RSS_FEEDS
 )
@@ -19,6 +24,7 @@ DB_PATH = "data/news.db"
 TIMEOUT = 25
 
 def db():
+
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS processed ("
