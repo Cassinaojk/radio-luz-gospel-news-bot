@@ -13,8 +13,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 WP_POST_STATUS = "draft"  # Salva como rascunho. Mude para "publish" para postar direto.
 ARTICLES_PER_RUN = 3
 
-# Lista de fontes com os links oficiais do segmento Gospel
+# Usando apenas uma fonte estável para o teste definitivo
 RSS_FEEDS = [
-    ("Gospel", "https://www.uaugospel.com.br/feed/"),
-    ("Gospel", "https://fuxicogospel.com.br")
+    ("Gospel", "https://www.uaugospel.com.br/feed/")
 ]
