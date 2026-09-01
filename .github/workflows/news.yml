@@ -2,11 +2,10 @@ name: Executar Robô de Notícias
 
 on:
   schedule:
-    # Roda 3 vezes ao dia (ajuste os horários se desejar, formato UTC)
     - cron: '0 9 * * *'   # 06:00 BRT
     - cron: '0 15 * * *'  # 12:00 BRT
     - cron: '0 21 * * *'  # 18:00 BRT
-  workflow_dispatch:      # Permite que você clique num botão e teste manualmente
+  workflow_dispatch:      
 
 jobs:
   run-bot:
@@ -25,7 +24,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-            - name: Executar o Robô
+      - name: Executar o Robô
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
@@ -34,3 +33,4 @@ jobs:
         run: |
           mkdir -p data
           python bot/main.py
+
