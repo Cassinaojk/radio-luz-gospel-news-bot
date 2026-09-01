@@ -15,6 +15,6 @@ ARTICLES_PER_RUN = 3
 
 # Lista de fontes de notícias corrigida no formato (categoria, url) esperado pelo robô
 RSS_FEEDS = [
-    ("Geral", "https://globo.com"),
-    ("Noticias", "https://cnnbrasil.com.br")
+    ("Tecnologia", "https://globo.com"),
+    ("Mundo", "https://globo.com")
 ]
