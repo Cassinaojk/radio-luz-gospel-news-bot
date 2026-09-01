@@ -13,9 +13,9 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 WP_POST_STATUS = "draft"  # Salva como rascunho. Mude para "publish" para postar direto.
 ARTICLES_PER_RUN = 3
 
-# Lista de fontes com feeds de alta frequência para forçar conteúdo inédito
+# Lista de fontes com os links RSS oficiais e completos
 RSS_FEEDS = [
-    ("Tecnologia", "https://globo.com"),
-    ("Economia", "https://globo.com"),
-    ("Pop-Arte", "https://globo.com")
+    ("Geral", "https://globo.com"),
+    ("Tecnologia", "https://globo.comtecnologia/"),
+    ("Economia", "https://globo.comeconomia/")
 ]
