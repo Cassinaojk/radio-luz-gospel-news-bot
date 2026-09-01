@@ -5,7 +5,7 @@ WP_USERNAME = os.environ["WP_USERNAME"]
 WP_APP_PASSWORD = os.environ["WP_APP_PASSWORD"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL = "gemini-3.6-flash")
 WP_POST_STATUS = os.getenv("WP_POST_STATUS", "draft")
 ARTICLES_PER_RUN = int(os.getenv("ARTICLES_PER_RUN", "1"))
 
