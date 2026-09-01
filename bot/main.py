@@ -124,7 +124,7 @@ def gemini(prompt):
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.35,
+            "temperature": 0.2,
             "responseMimeType": "application/json"
         }
     }
@@ -132,13 +132,20 @@ def gemini(prompt):
     r.raise_for_status()
     data = r.json()
     
-    text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    if text_response.startswith("```json"):
-        text_response = text_response.replace("```json", "", 1).rstrip("```").strip()
-    elif text_response.startswith("```"):
-        text_response = text_response.replace("```", "", 1).rstrip("```").strip()
+    # Pega o texto bruto retornado pela inteligência artificial
+    try:
+        text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError):
+        raise ValueError("Estrutura de resposta da API do Gemini inválida.")
+    
+    # Limpeza profunda para garantir que seja apenas JSON puro
+    text_response = re.sub(r"^```json\s*", "", text_response, flags=re.IGNORECASE)
+    text_response = re.sub(r"^```\s*", "", text_response, flags=re.IGNORECASE)
+    text_response = re.sub(r"\s*```$", "", text_response, flags=re.IGNORECASE)
+    text_response = text_response.strip()
         
     return json.loads(text_response)
+
 
 def generate_article(item, source_text):
     material = (
