@@ -72,7 +72,6 @@ def collect():
     for category, feed_url in RSS_FEEDS:
         try:
             print(f"[INFO] Baixando conteúdo do feed: {feed_url}")
-            # Baixa o conteúdo usando requests primeiro com timeout rígido para evitar congelamento
             r = requests.get(feed_url, timeout=TIMEOUT, headers=headers)
             if r.status_code >= 400:
                 print(f"[WARN] Feed retornou status {r.status_code}. Pulando.")
@@ -132,20 +131,25 @@ def gemini(prompt):
     r.raise_for_status()
     data = r.json()
     
-    # Pega o texto bruto retornado pela inteligência artificial
+    # Sistema de leitura inteligente compatível com a versão antiga e nova da API
+    text_response = ""
     try:
+        # Tenta o formato padrão (Lista estruturada)
         text_response = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError):
-        raise ValueError("Estrutura de resposta da API do Gemini inválida.")
+    except (KeyError, IndexError, TypeError):
+        try:
+            # Tenta o formato alternativo simplificado
+            text_response = data["candidates"]["content"]["parts"]["text"].strip()
+        except Exception:
+            raise ValueError(f"Não foi possível ler a estrutura da API do Gemini. Resposta recebida: {data}")
     
-    # Limpeza profunda para garantir que seja apenas JSON puro
+    # Limpeza de possíveis formatações de bloco markdown do JSON
     text_response = re.sub(r"^```json\s*", "", text_response, flags=re.IGNORECASE)
     text_response = re.sub(r"^```\s*", "", text_response, flags=re.IGNORECASE)
     text_response = re.sub(r"\s*```$", "", text_response, flags=re.IGNORECASE)
     text_response = text_response.strip()
         
     return json.loads(text_response)
-
 
 def generate_article(item, source_text):
     material = (
@@ -294,18 +298,3 @@ def main():
 
         if not article.get("publish"):
             print("[INFO] Conteúdo insuficiente segundo o Gemini; não publicar.")
-            mark_seen(conn, fp, item)
-            continue
-
-        try:
-            post = publish(article, item)
-            print(f"[OK] Post {post['id']} criado com sucesso! — {post['link']}")
-            mark_seen(conn, fp, item, post["id"])
-            published += 1
-        except Exception as exc:
-            print(f"[ERROR] Erro na postagem do WordPress: {exc}")
-
-    print(f"[INFO] Publicadas nesta execução: {published}")
-
-if __name__ == "__main__":
-    main()
