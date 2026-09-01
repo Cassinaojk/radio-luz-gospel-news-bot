@@ -30,7 +30,4 @@ jobs:
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
           WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: |
-          mkdir -p data
-          rm -f data/news.db
-          python bot/main.py
+        run: python bot/main.py
