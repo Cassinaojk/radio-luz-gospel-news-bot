@@ -24,7 +24,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-           - name: Executar o Robô
+      - name: Executar o Robô
         env:
           WP_URL: ${{ secrets.WP_URL }}
           WP_USERNAME: ${{ secrets.WP_USERNAME }}
@@ -34,5 +34,3 @@ jobs:
           mkdir -p data
           rm -f data/news.db
           python bot/main.py
-
-
