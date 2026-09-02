@@ -5,7 +5,6 @@ on:
     - cron: '0 9 * * *'
     - cron: '0 15 * * *'
     - cron: '0 21 * * *'
-
   workflow_dispatch:
 
 jobs:
@@ -15,7 +14,6 @@ jobs:
     timeout-minutes: 10
 
     steps:
-
       - name: Baixar código do repositório
         uses: actions/checkout@v4
 
@@ -36,11 +34,9 @@ jobs:
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
           BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PYTHONUNBUFFERED: "1"
-
         run: |
           set -o pipefail
-          python bot/main.py 2>&1 | tee log_erro.txt
+          python -u bot/main.py 2>&1 | tee log_erro.txt
 
       - name: Guardar relatório
         if: always()
