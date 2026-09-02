@@ -32,6 +32,13 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 # Contador de chamadas Gemini nesta execução.
 gemini_calls_this_run = 0
 
+# Limites de proteção contra excesso de uso do Gemini e publicações.
+MAX_GEMINI_CALLS_PER_RUN = 1
+MAX_POSTS_PER_DAY = 3
+
+# Identificação das publicações feitas pelo robô.
+BOT_LABEL = "Radio Luz Gospel Bot"
+
 
 # False = publicação automática
 # True = cria rascunho
