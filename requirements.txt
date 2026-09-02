@@ -1,6 +1,6 @@
 beautifulsoup4
 requests
-google-generativeai
+google-genai
 google-api-python-client
 google-auth
 google-auth-httplib2
