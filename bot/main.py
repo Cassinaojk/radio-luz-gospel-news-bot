@@ -1,9 +1,12 @@
 import os
 import re
 import time
-import requests
+from datetime import datetime, timezone, timedelta
+from urllib.parse import urljoin
 
+import requests
 from bs4 import BeautifulSoup
+
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -21,13 +24,15 @@ BLOGGER_REFRESH_TOKEN = os.environ["BLOGGER_REFRESH_TOKEN"]
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-# True = cria rascunho
-# False = publica automaticamente
+# TRUE = cria rascunho
+# FALSE = publica automaticamente
 BLOGGER_DRAFT = True
 
-SOURCE_URL = "https://www.fuxicogospel.com.br/ultimas-noticias/"
+# Quantidade máxima de links que serão analisados por fonte
+MAX_LINKS_PER_SOURCE = 5
 
-MAX_ARTICLES_TO_CHECK = 10
+# Quantos dias uma notícia pode ter para ser considerada recente
+MAX_AGE_DAYS = 30
 
 HEADERS = {
     "User-Agent": (
@@ -35,8 +40,38 @@ HEADERS = {
         "AppleWebKit/537.36 "
         "(KHTML, like Gecko) "
         "Chrome/131.0 Safari/537.36"
-    )
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/avif,"
+        "image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    "Cache-Control": "no-cache",
 }
+
+
+# ============================================================
+# FONTES
+# ============================================================
+
+FONTES = [
+    {
+        "nome": "Fuxico Gospel",
+        "pagina": "https://www.fuxicogospel.com.br/",
+        "dominio": "www.fuxicogospel.com.br",
+    },
+    {
+        "nome": "UAU Gospel",
+        "pagina": "https://www.uaugospel.com.br/",
+        "dominio": "www.uaugospel.com.br",
+    },
+    {
+        "nome": "News Gospel",
+        "pagina": "https://www.newsgospel.com.br/",
+        "dominio": "www.newsgospel.com.br",
+    },
+]
 
 
 # ============================================================
@@ -44,6 +79,7 @@ HEADERS = {
 # ============================================================
 
 def conectar_blogger():
+
     print("Conectando ao Blogger...")
 
     credentials = Credentials(
@@ -71,209 +107,6 @@ def conectar_blogger():
     print("Conexão com Blogger: OK")
 
     return service
-
-
-# ============================================================
-# BUSCAR ÚLTIMAS NOTÍCIAS
-# ============================================================
-
-def buscar_pagina_noticias():
-    print()
-    print("Buscando últimas notícias...")
-
-    response = requests.get(
-        SOURCE_URL,
-        headers=HEADERS,
-        timeout=30,
-    )
-
-    print(
-        f"Página acessada: HTTP {response.status_code}"
-    )
-
-    response.raise_for_status()
-
-    return response.text
-
-
-# ============================================================
-# ENCONTRAR LINKS DOS ARTIGOS
-# ============================================================
-
-def encontrar_links(html):
-    soup = BeautifulSoup(html, "html.parser")
-
-    links = []
-
-    for a in soup.find_all("a", href=True):
-
-        href = a["href"].strip()
-
-        if not href.startswith(
-            "https://www.fuxicogospel.com.br/"
-        ):
-            continue
-
-        ignorar = [
-            "/ultimas-noticias/",
-            "/politica-de-privacidade/",
-            "/politica-de-cookies/",
-            "/termos-de-uso/",
-            "/contato/",
-            "/sobre/",
-            "/autor/",
-            "/category/",
-            "/tag/",
-            "/page/",
-        ]
-
-        if any(item in href for item in ignorar):
-            continue
-
-        if href not in links:
-            links.append(href)
-
-    print(
-        f"Links encontrados: {len(links)}"
-    )
-
-    return links
-
-
-# ============================================================
-# EXTRAIR NOTÍCIA
-# ============================================================
-
-def extrair_noticia(url):
-    print()
-    print("Abrindo notícia:")
-    print(url)
-
-    try:
-
-        response = requests.get(
-            url,
-            headers=HEADERS,
-            timeout=30,
-        )
-
-        print(
-            f"HTTP: {response.status_code}"
-        )
-
-        if response.status_code != 200:
-            return None
-
-        soup = BeautifulSoup(
-            response.text,
-            "html.parser"
-        )
-
-        # ----------------------------------------------------
-        # TÍTULO
-        # ----------------------------------------------------
-
-        titulo = ""
-
-        h1 = soup.find("h1")
-
-        if h1:
-            titulo = h1.get_text(
-                " ",
-                strip=True
-            )
-
-        if not titulo:
-
-            title_tag = soup.find("title")
-
-            if title_tag:
-                titulo = title_tag.get_text(
-                    " ",
-                    strip=True
-                )
-
-        if not titulo:
-            return None
-
-        # ----------------------------------------------------
-        # TEXTO
-        # ----------------------------------------------------
-
-        paragrafos = []
-
-        seletores = [
-            "article",
-            ".post-content",
-            ".entry-content",
-            ".td-post-content",
-            ".single-post-content",
-            "main",
-        ]
-
-        container = None
-
-        for seletor in seletores:
-
-            encontrado = soup.select_one(
-                seletor
-            )
-
-            if encontrado:
-                container = encontrado
-                break
-
-        if container:
-            elementos = container.find_all("p")
-        else:
-            elementos = soup.find_all("p")
-
-        for p in elementos:
-
-            texto = p.get_text(
-                " ",
-                strip=True
-            )
-
-            if len(texto) >= 40:
-                paragrafos.append(texto)
-
-        texto = "\n\n".join(
-            paragrafos
-        )
-
-        if len(texto) < 200:
-
-            print(
-                "Texto insuficiente."
-            )
-
-            return None
-
-        # Limita o tamanho enviado ao Gemini
-        texto = texto[:12000]
-
-        print(
-            f"Notícia encontrada: {titulo}"
-        )
-
-        print(
-            f"Texto extraído: {len(texto)} caracteres"
-        )
-
-        return {
-            "titulo": titulo,
-            "texto": texto,
-            "url": url,
-        }
-
-    except Exception as e:
-
-        print(
-            f"Erro ao abrir notícia: {e}"
-        )
-
-        return None
 
 
 # ============================================================
@@ -313,7 +146,6 @@ def buscar_posts(service, status):
             resposta.get("items", [])
         )
 
-        # Continua buscando caso existam páginas
         while resposta.get("nextPageToken"):
 
             resposta = service.posts().list(
@@ -330,7 +162,7 @@ def buscar_posts(service, status):
     except Exception as e:
 
         print(
-            f"Erro buscando posts com status {status}: {e}"
+            f"Erro buscando posts {status}: {e}"
         )
 
     return posts
@@ -346,84 +178,468 @@ def noticia_ja_existe(service, titulo, url):
         "Verificando se a notícia já existe..."
     )
 
-    try:
+    posts = []
 
-        # IMPORTANTE:
-        # A API do Blogger usa LIVE e DRAFT em letras maiúsculas.
-
-        posts_publicados = buscar_posts(
+    posts.extend(
+        buscar_posts(
             service,
             "LIVE"
         )
+    )
 
-        posts_rascunhos = buscar_posts(
+    posts.extend(
+        buscar_posts(
             service,
             "DRAFT"
         )
+    )
 
-        posts = (
-            posts_publicados
-            + posts_rascunhos
+    titulo_normalizado = normalizar_texto(
+        titulo
+    )
+
+    for post in posts:
+
+        titulo_post = post.get(
+            "title",
+            ""
         )
 
-        titulo_normalizado = normalizar_texto(
-            titulo
+        conteudo_post = post.get(
+            "content",
+            ""
         )
 
-        for post in posts:
+        # Verificação pelo título
+        if (
+            normalizar_texto(
+                titulo_post
+            )
+            == titulo_normalizado
+        ):
 
-            titulo_post = post.get(
-                "title",
-                ""
+            print(
+                "Notícia já existe pelo título."
             )
 
-            conteudo_post = post.get(
-                "content",
-                ""
+            return True
+
+        # Verificação pela fonte
+        if url in conteudo_post:
+
+            print(
+                "Notícia já existe pelo link."
             )
 
-            # Verifica título
-            if (
-                normalizar_texto(
-                    titulo_post
-                )
-                == titulo_normalizado
-            ):
+            return True
 
-                print(
-                    "Notícia já existe pelo título."
-                )
+    print(
+        "Notícia nova."
+    )
 
-                return True
+    return False
 
-            # Verifica link da fonte
-            if url in conteudo_post:
 
-                print(
-                    "Notícia já existe pelo link."
-                )
+# ============================================================
+# ACESSAR UMA FONTE
+# ============================================================
 
-                return True
+def acessar_fonte(fonte):
+
+    nome = fonte["nome"]
+    pagina = fonte["pagina"]
+
+    print()
+    print("-" * 60)
+    print(
+        f"FONTE: {nome}"
+    )
+    print("-" * 60)
+
+    try:
+
+        response = requests.get(
+            pagina,
+            headers=HEADERS,
+            timeout=30,
+        )
 
         print(
-            "Notícia nova."
+            f"HTTP: {response.status_code}"
         )
 
-        return False
+        if response.status_code != 200:
+
+            print(
+                f"{nome}: acesso recusado ou indisponível."
+            )
+
+            return None
+
+        return response.text
 
     except Exception as e:
 
         print(
-            f"Erro verificando duplicidade: {e}"
+            f"{nome}: erro de conexão: {e}"
         )
 
-        # Se houver erro, não bloqueia completamente
-        # o robô.
-        return False
+        return None
 
 
 # ============================================================
-# GERAR NOTÍCIA COM GEMINI
+# ENCONTRAR LINKS DE ARTIGOS
+# ============================================================
+
+def encontrar_links(fonte, html):
+
+    soup = BeautifulSoup(
+        html,
+        "html.parser"
+    )
+
+    dominio = fonte["dominio"]
+
+    links = []
+
+    for a in soup.find_all(
+        "a",
+        href=True
+    ):
+
+        href = a["href"].strip()
+
+        href = urljoin(
+            fonte["pagina"],
+            href
+        )
+
+        if not href.startswith(
+            f"https://{dominio}/"
+        ):
+
+            continue
+
+        # Remove fragmentos
+        href = href.split("#")[0]
+
+        # Ignorar páginas que não são matérias
+        ignorar = [
+            "/category/",
+            "/tag/",
+            "/autor/",
+            "/author/",
+            "/page/",
+            "/search/",
+            "/feed/",
+            "/wp-json/",
+            "/contato",
+            "/sobre",
+            "/politica",
+            "/termos",
+            "/privacidade",
+            "/ultimas-noticias/",
+        ]
+
+        if any(
+            item in href
+            for item in ignorar
+        ):
+
+            continue
+
+        # Evita duplicidade
+        if href not in links:
+
+            links.append(href)
+
+    print(
+        f"Links encontrados: {len(links)}"
+    )
+
+    return links[:MAX_LINKS_PER_SOURCE]
+
+
+# ============================================================
+# EXTRAIR DATA
+# ============================================================
+
+def extrair_data(soup):
+
+    candidatos = []
+
+    # Meta tags
+    metas = [
+        ("meta", {"property": "article:published_time"}),
+        ("meta", {"property": "og:published_time"}),
+        ("meta", {"name": "date"}),
+        ("meta", {"name": "publish-date"}),
+    ]
+
+    for tag, atributos in metas:
+
+        elemento = soup.find(
+            tag,
+            atributos
+        )
+
+        if elemento:
+
+            valor = (
+                elemento.get("content")
+                or elemento.get("datetime")
+            )
+
+            if valor:
+                candidatos.append(valor)
+
+    # Tags time
+    for elemento in soup.find_all("time"):
+
+        valor = (
+            elemento.get("datetime")
+            or elemento.get_text(
+                " ",
+                strip=True
+            )
+        )
+
+        if valor:
+            candidatos.append(valor)
+
+    # Tenta interpretar as datas
+    agora = datetime.now(
+        timezone.utc
+    )
+
+    for valor in candidatos:
+
+        valor = valor.strip()
+
+        try:
+
+            # ISO
+            data = datetime.fromisoformat(
+                valor.replace(
+                    "Z",
+                    "+00:00"
+                )
+            )
+
+            if data.tzinfo is None:
+
+                data = data.replace(
+                    tzinfo=timezone.utc
+                )
+
+            return data
+
+        except Exception:
+            pass
+
+    return None
+
+
+# ============================================================
+# VERIFICAR SE É RECENTE
+# ============================================================
+
+def noticia_recente(data):
+
+    if data is None:
+
+        # Se não conseguirmos identificar a data,
+        # permitimos a análise.
+        return True
+
+    limite = datetime.now(
+        timezone.utc
+    ) - timedelta(
+        days=MAX_AGE_DAYS
+    )
+
+    return data >= limite
+
+
+# ============================================================
+# EXTRAIR NOTÍCIA
+# ============================================================
+
+def extrair_noticia(fonte, url):
+
+    print()
+    print(
+        f"Abrindo notícia:"
+    )
+    print(url)
+
+    try:
+
+        response = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=30,
+        )
+
+        print(
+            f"HTTP: {response.status_code}"
+        )
+
+        if response.status_code != 200:
+
+            return None
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
+
+        # ----------------------------------------------------
+        # TÍTULO
+        # ----------------------------------------------------
+
+        titulo = ""
+
+        h1 = soup.find("h1")
+
+        if h1:
+
+            titulo = h1.get_text(
+                " ",
+                strip=True
+            )
+
+        if not titulo:
+
+            title = soup.find("title")
+
+            if title:
+
+                titulo = title.get_text(
+                    " ",
+                    strip=True
+                )
+
+        if not titulo:
+
+            return None
+
+        # ----------------------------------------------------
+        # DATA
+        # ----------------------------------------------------
+
+        data = extrair_data(
+            soup
+        )
+
+        if data:
+
+            print(
+                f"Data encontrada: {data.isoformat()}"
+            )
+
+            if not noticia_recente(data):
+
+                print(
+                    "Notícia antiga. Pulando."
+                )
+
+                return None
+
+        # ----------------------------------------------------
+        # CONTEÚDO
+        # ----------------------------------------------------
+
+        seletores = [
+            "article",
+            ".post-content",
+            ".entry-content",
+            ".td-post-content",
+            ".single-post-content",
+            "main",
+        ]
+
+        container = None
+
+        for seletor in seletores:
+
+            encontrado = soup.select_one(
+                seletor
+            )
+
+            if encontrado:
+
+                container = encontrado
+
+                break
+
+        if container:
+
+            elementos = (
+                container.find_all("p")
+            )
+
+        else:
+
+            elementos = (
+                soup.find_all("p")
+            )
+
+        paragrafos = []
+
+        for p in elementos:
+
+            texto = p.get_text(
+                " ",
+                strip=True
+            )
+
+            if len(texto) >= 40:
+
+                paragrafos.append(
+                    texto
+                )
+
+        texto = "\n\n".join(
+            paragrafos
+        )
+
+        if len(texto) < 200:
+
+            print(
+                "Texto insuficiente."
+            )
+
+            return None
+
+        texto = texto[:12000]
+
+        print(
+            f"Notícia encontrada: {titulo}"
+        )
+
+        print(
+            f"Texto extraído: {len(texto)} caracteres"
+        )
+
+        return {
+            "titulo": titulo,
+            "texto": texto,
+            "url": url,
+            "fonte": fonte["nome"],
+        }
+
+    except Exception as e:
+
+        print(
+            f"Erro ao abrir notícia: {e}"
+        )
+
+        return None
+
+
+# ============================================================
+# GEMINI
 # ============================================================
 
 def gerar_noticia_com_gemini(noticia):
@@ -440,36 +656,39 @@ def gerar_noticia_com_gemini(noticia):
     prompt = f"""
 Você é jornalista de um portal de notícias gospel brasileiro.
 
-Sua tarefa é produzir uma nova matéria jornalística ORIGINAL
-a partir das informações da notícia abaixo.
+Produza uma matéria jornalística ORIGINAL a partir das
+informações fornecidas abaixo.
 
-REGRAS IMPORTANTES:
+REGRAS OBRIGATÓRIAS:
 
-- NÃO copie frases da matéria original.
-- NÃO faça uma simples troca de palavras.
-- NÃO invente informações.
-- NÃO invente nomes.
-- NÃO invente datas.
-- NÃO invente números.
-- NÃO invente declarações.
-- Preserve os fatos principais.
+- Não copie frases da fonte.
+- Não faça simples troca de palavras.
+- Reescreva a matéria de forma original.
+- Não invente fatos.
+- Não invente nomes.
+- Não invente datas.
+- Não invente números.
+- Não invente declarações.
+- Preserve os fatos importantes.
 - Escreva em português brasileiro.
 - Use linguagem jornalística clara.
-- O texto deve parecer uma matéria publicada em um portal gospel.
-- Crie um novo título.
-- Crie um subtítulo.
+- Crie um título novo.
+- Crie um subtítulo novo.
 - Use parágrafos curtos.
 - Não use emojis.
 - Não mencione inteligência artificial.
 - Não mencione ChatGPT.
 - Não use Markdown.
-- Retorne HTML simples.
+- Retorne somente HTML simples.
+
+A matéria deve ter aproximadamente
+400 a 600 palavras.
 
 ESTRUTURA:
 
-<h1>Título da notícia</h1>
+<h1>Título novo</h1>
 
-<p><strong>Subtítulo da notícia.</strong></p>
+<p><strong>Subtítulo novo.</strong></p>
 
 <p>Primeiro parágrafo...</p>
 
@@ -477,14 +696,13 @@ ESTRUTURA:
 
 <p>Terceiro parágrafo...</p>
 
-A matéria deve ter aproximadamente 400 a 600 palavras.
+FONTE:
+{noticia["fonte"]}
 
-NOTÍCIA ORIGINAL:
-
-Título:
+TÍTULO ORIGINAL:
 {noticia["titulo"]}
 
-Conteúdo:
+CONTEÚDO ORIGINAL:
 {noticia["texto"]}
 """
 
@@ -505,7 +723,6 @@ Conteúdo:
 
             return None
 
-        # Remove possíveis blocos Markdown
         texto = texto.replace(
             "```html",
             ""
@@ -526,7 +743,6 @@ Conteúdo:
 
     except Exception as e:
 
-        print()
         print(
             f"Erro no Gemini: {e}"
         )
@@ -583,7 +799,7 @@ def publicar_no_blogger(
 <a href="{noticia['url']}"
 target="_blank"
 rel="nofollow noopener">
-Fuxico Gospel
+{noticia['fonte']}
 </a>
 </p>
 """
@@ -649,7 +865,6 @@ Fuxico Gospel
 
     except Exception as e:
 
-        print()
         print(
             f"Erro publicando no Blogger: {e}"
         )
@@ -666,13 +881,13 @@ def main():
     print()
     print("=" * 60)
     print(
-        "RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS"
+        "RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 2.0"
     )
     print("=" * 60)
     print()
 
     # --------------------------------------------------------
-    # CONECTAR BLOGGER
+    # BLOGGER
     # --------------------------------------------------------
 
     try:
@@ -691,138 +906,121 @@ def main():
         return
 
     # --------------------------------------------------------
-    # BUSCAR NOTÍCIAS
+    # PROCESSAR FONTES
     # --------------------------------------------------------
 
-    try:
+    total_links = 0
+    total_noticias = 0
 
-        html = buscar_pagina_noticias()
+    for fonte in FONTES:
 
-    except Exception as e:
-
-        print()
-        print(
-            "ERRO AO ACESSAR O SITE DE NOTÍCIAS:"
+        html = acessar_fonte(
+            fonte
         )
 
-        print(e)
-
-        return
-
-    # --------------------------------------------------------
-    # ENCONTRAR LINKS
-    # --------------------------------------------------------
-
-    links = encontrar_links(html)
-
-    if not links:
-
-        print()
-        print(
-            "Nenhum link de notícia encontrado."
-        )
-
-        return
-
-    links = links[
-        :MAX_ARTICLES_TO_CHECK
-    ]
-
-    print(
-        f"Notícias encontradas: {len(links)}"
-    )
-
-    # --------------------------------------------------------
-    # PROCESSAR
-    # --------------------------------------------------------
-
-    for numero, url in enumerate(
-        links,
-        start=1
-    ):
-
-        print()
-        print("=" * 60)
-        print(
-            f"PROCESSANDO NOTÍCIA "
-            f"{numero}/{len(links)}"
-        )
-        print("=" * 60)
-
-        # ----------------------------------------------------
-        # EXTRAIR
-        # ----------------------------------------------------
-
-        noticia = extrair_noticia(
-            url
-        )
-
-        if not noticia:
+        if not html:
 
             print(
-                "Não foi possível extrair esta notícia."
+                f"Pulando {fonte['nome']}."
+            )
+
+            continue
+
+        links = encontrar_links(
+            fonte,
+            html
+        )
+
+        total_links += len(links)
+
+        if not links:
+
+            print(
+                f"Nenhuma notícia encontrada em "
+                f"{fonte['nome']}."
             )
 
             continue
 
         # ----------------------------------------------------
-        # DUPLICIDADE
+        # PROCESSAR LINKS
         # ----------------------------------------------------
 
-        if noticia_ja_existe(
-            service,
-            noticia["titulo"],
-            noticia["url"],
-        ):
+        for url in links:
 
-            print(
-                "Pulando notícia duplicada."
+            noticia = extrair_noticia(
+                fonte,
+                url
             )
 
-            continue
+            if not noticia:
 
-        # ----------------------------------------------------
-        # GEMINI
-        # ----------------------------------------------------
+                continue
 
-        conteudo = gerar_noticia_com_gemini(
-            noticia
-        )
+            total_noticias += 1
 
-        if not conteudo:
+            # ------------------------------------------------
+            # DUPLICIDADE
+            # ------------------------------------------------
 
-            print(
-                "Falha na geração."
+            if noticia_ja_existe(
+                service,
+                noticia["titulo"],
+                noticia["url"],
+            ):
+
+                print(
+                    "Notícia duplicada. Pulando."
+                )
+
+                continue
+
+            # ------------------------------------------------
+            # GEMINI
+            # ------------------------------------------------
+
+            conteudo = (
+                gerar_noticia_com_gemini(
+                    noticia
+                )
             )
 
-            print(
-                "Tentando próxima notícia..."
+            if not conteudo:
+
+                print(
+                    "Falha no Gemini."
+                )
+
+                print(
+                    "Tentando próxima notícia..."
+                )
+
+                time.sleep(2)
+
+                continue
+
+            # ------------------------------------------------
+            # BLOGGER
+            # ------------------------------------------------
+
+            resultado = publicar_no_blogger(
+                service,
+                conteudo,
+                noticia,
             )
+
+            if resultado:
+
+                print()
+                print("=" * 60)
+                print(
+                    "ROBÔ FINALIZADO COM SUCESSO."
+                )
+                print("=" * 60)
+
+                return
 
             time.sleep(2)
-
-            continue
-
-        # ----------------------------------------------------
-        # BLOGGER
-        # ----------------------------------------------------
-
-        resultado = publicar_no_blogger(
-            service,
-            conteudo,
-            noticia,
-        )
-
-        if resultado:
-
-            print()
-            print(
-                "Robô finalizado com sucesso."
-            )
-
-            return
-
-        time.sleep(2)
 
     # --------------------------------------------------------
     # FINAL
@@ -831,14 +1029,25 @@ def main():
     print()
     print("=" * 60)
     print(
-        "NENHUMA NOTÍCIA NOVA "
-        "PÔDE SER PUBLICADA."
+        "PROCESSAMENTO FINALIZADO."
     )
     print("=" * 60)
 
+    print(
+        f"Links encontrados: {total_links}"
+    )
+
+    print(
+        f"Notícias analisadas: {total_noticias}"
+    )
+
+    print(
+        "Nenhuma notícia nova pôde ser publicada."
+    )
+
 
 # ============================================================
-# INICIAR ROBÔ
+# EXECUTAR
 # ============================================================
 
 if __name__ == "__main__":
