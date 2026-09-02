@@ -1,9 +1,11 @@
 import os
 import re
 import html
-import feedparser
-import google.generativeai as genai
 
+import requests
+from bs4 import BeautifulSoup
+
+from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
@@ -21,20 +23,28 @@ BLOGGER_REFRESH_TOKEN = os.environ["BLOGGER_REFRESH_TOKEN"]
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-# Por segurança, o primeiro teste será como RASCUNHO.
+# Primeiro teste como RASCUNHO
 BLOGGER_DRAFT = True
 
-# Fonte de notícias
-RSS_URL = "https://fuxicogospel.com.br/feed/"
+SITE_URL = "https://www.fuxicogospel.com.br"
+ULTIMAS_NOTICIAS_URL = (
+    "https://www.fuxicogospel.com.br/ultimas-noticias/"
+)
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 "
+        "Chrome/128.0 Safari/537.36"
+    )
+}
 
 
 # ============================================================
 # GEMINI
 # ============================================================
 
-genai.configure(api_key=GEMINI_API_KEY)
-
-model = genai.GenerativeModel("gemini-2.5-flash")
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 
 # ============================================================
@@ -42,6 +52,7 @@ model = genai.GenerativeModel("gemini-2.5-flash")
 # ============================================================
 
 def criar_servico_blogger():
+
     credentials = Credentials(
         token=None,
         refresh_token=BLOGGER_REFRESH_TOKEN,
@@ -65,46 +76,180 @@ def criar_servico_blogger():
 
 
 # ============================================================
-# LIMPAR HTML
+# LIMPAR TEXTO
 # ============================================================
 
-def limpar_html(texto):
+def limpar_texto(texto):
+
     texto = html.unescape(texto)
-    texto = re.sub(r"<[^>]+>", " ", texto)
     texto = re.sub(r"\s+", " ", texto)
+
     return texto.strip()
 
 
 # ============================================================
-# BUSCAR NOTÍCIAS
+# BUSCAR ÚLTIMA NOTÍCIA
 # ============================================================
 
 def buscar_noticias():
-    print("Buscando notícias...")
 
-    feed = feedparser.parse(RSS_URL)
+    print("Acessando Fuxico Gospel...")
+    print(ULTIMAS_NOTICIAS_URL)
+
+    resposta = requests.get(
+        ULTIMAS_NOTICIAS_URL,
+        headers=HEADERS,
+        timeout=30,
+    )
+
+    resposta.raise_for_status()
+
+    print(f"Página acessada. HTTP {resposta.status_code}")
+
+    soup = BeautifulSoup(
+        resposta.text,
+        "html.parser",
+    )
 
     noticias = []
 
-    for item in feed.entries[:5]:
-        titulo = item.get("title", "").strip()
-        link = item.get("link", "").strip()
-        resumo = limpar_html(
-            item.get("summary", item.get("description", ""))
+    # Procuramos links internos que levam para matérias.
+    for link in soup.find_all("a", href=True):
+
+        href = link.get("href", "").strip()
+
+        titulo = link.get_text(
+            " ",
+            strip=True,
         )
 
-        if titulo and link:
-            noticias.append(
-                {
-                    "title": titulo,
-                    "link": link,
-                    "summary": resumo,
-                }
+        if not titulo:
+            continue
+
+        # Somente links do próprio site
+        if not href.startswith(SITE_URL):
+            continue
+
+        # Ignorar páginas que não são notícias
+        ignorar = [
+            "/ultimas-noticias/",
+            "/politica-editorial/",
+            "/politica-de-privacidade/",
+            "/expediente/",
+            "/quem-somos/",
+            "/contato/",
+            "/termos-de-uso/",
+            "/autor/",
+            "/categoria/",
+            "/tag/",
+            "/tudo-sobre/",
+        ]
+
+        if any(item in href for item in ignorar):
+            continue
+
+        # Links de matéria normalmente têm caminho próprio
+        caminho = href.replace(SITE_URL, "").strip("/")
+
+        if not caminho:
+            continue
+
+        # Evita duplicados
+        if any(n["link"] == href for n in noticias):
+            continue
+
+        noticias.append(
+            {
+                "title": limpar_texto(titulo),
+                "link": href,
+            }
+        )
+
+    print(f"Links encontrados: {len(noticias)}")
+
+    return noticias[:10]
+
+
+# ============================================================
+# PEGAR CONTEÚDO DA NOTÍCIA
+# ============================================================
+
+def abrir_noticia(url):
+
+    print("Abrindo notícia:")
+    print(url)
+
+    resposta = requests.get(
+        url,
+        headers=HEADERS,
+        timeout=30,
+    )
+
+    resposta.raise_for_status()
+
+    soup = BeautifulSoup(
+        resposta.text,
+        "html.parser",
+    )
+
+    # Título
+    titulo_tag = soup.find("h1")
+
+    titulo = ""
+
+    if titulo_tag:
+        titulo = limpar_texto(
+            titulo_tag.get_text(" ", strip=True)
+        )
+
+    # Subtítulo
+    subtitulo = ""
+
+    h1 = soup.find("h1")
+
+    if h1:
+        proximo = h1.find_next()
+
+        if proximo:
+            texto = limpar_texto(
+                proximo.get_text(" ", strip=True)
             )
 
-    print(f"Notícias encontradas: {len(noticias)}")
+            if texto and texto != titulo:
+                subtitulo = texto
 
-    return noticias
+    # Corpo da notícia
+    conteudo = []
+
+    # Procuramos parágrafos relevantes
+    for p in soup.find_all("p"):
+
+        texto = limpar_texto(
+            p.get_text(" ", strip=True)
+        )
+
+        if len(texto) < 40:
+            continue
+
+        conteudo.append(texto)
+
+    # Limitar tamanho enviado ao Gemini
+    conteudo = conteudo[:40]
+
+    texto_completo = "\n\n".join(conteudo)
+
+    print(f"Título encontrado: {titulo}")
+    print(
+        f"Texto encontrado: "
+        f"{len(texto_completo)} caracteres"
+    )
+
+    return {
+        "title": titulo,
+        "summary": subtitulo,
+        "content": texto_completo,
+        "link": url,
+    }
 
 
 # ============================================================
@@ -112,75 +257,122 @@ def buscar_noticias():
 # ============================================================
 
 def gerar_materia(noticia):
+
     prompt = f"""
-Você é um jornalista especializado em notícias do meio gospel brasileiro.
+Você é jornalista de um portal de notícias gospel brasileiro.
 
-Escreva uma matéria jornalística original para o blog Rádio Luz Gospel.
+Crie uma matéria ORIGINAL para o blog Rádio Luz Gospel
+a partir das informações da notícia abaixo.
 
-IMPORTANTE:
-- Não copie o texto da fonte.
-- Reescreva com linguagem jornalística natural.
-- Não invente informações.
-- Não crie declarações que não estejam na fonte.
-- Use título jornalístico atraente, mas sem exageros.
-- A matéria deve ter aproximadamente 400 a 600 palavras.
-- Organize o texto com subtítulos quando fizer sentido.
+REGRAS IMPORTANTES:
+
+- Não copie frases longas da fonte.
+- Reescreva a informação com suas próprias palavras.
+- Não invente fatos.
+- Não invente declarações.
+- Preserve nomes, datas e informações importantes.
+- Use linguagem jornalística clara.
+- Não faça propaganda política.
+- Não dê opinião pessoal.
 - Não use emojis.
-- Retorne somente HTML simples para o conteúdo da matéria.
-- Não coloque <html>, <head> ou <body>.
+- Crie um título jornalístico.
+- Produza aproximadamente 400 a 600 palavras.
+- Use subtítulos HTML quando forem úteis.
+- Retorne SOMENTE o HTML da matéria.
+- Não use <html>, <head> ou <body>.
+- Não inclua observações sobre o processo de geração.
 
-Notícia original:
-
-Título:
+TÍTULO DA FONTE:
 {noticia["title"]}
 
-Resumo:
+SUBTÍTULO:
 {noticia["summary"]}
 
-Fonte:
+CONTEÚDO DA FONTE:
+{noticia["content"]}
+
+LINK DA FONTE:
 {noticia["link"]}
 """
 
     print("Gerando matéria com Gemini...")
 
-    response = model.generate_content(prompt)
+    resposta = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+    )
 
-    texto = response.text.strip()
+    texto = resposta.text.strip()
 
     return texto
 
 
 # ============================================================
-# VERIFICAR DUPLICATA
+# VERIFICAR DUPLICATA NO BLOGGER
 # ============================================================
 
-def noticia_ja_publicada(service, titulo):
-    print("Verificando se a notícia já existe...")
+def noticia_ja_publicada(service, titulo, link):
+
+    print("Verificando duplicata no Blogger...")
 
     try:
+
         resultado = (
             service.posts()
             .list(
                 blogId=BLOGGER_BLOG_ID,
-                fetchBodies=False,
+                fetchBodies=True,
                 maxResults=50,
             )
             .execute()
         )
 
-        posts = resultado.get("items", [])
+        posts = resultado.get(
+            "items",
+            [],
+        )
 
-        titulo_normalizado = titulo.lower().strip()
+        titulo_normalizado = (
+            titulo.lower().strip()
+        )
 
         for post in posts:
-            titulo_existente = post.get("title", "").lower().strip()
 
+            titulo_existente = (
+                post.get("title", "")
+                .lower()
+                .strip()
+            )
+
+            conteudo_existente = (
+                post.get("content", "")
+            )
+
+            # Verifica pelo título
             if titulo_existente == titulo_normalizado:
-                print("Notícia já publicada. Ignorando.")
+
+                print(
+                    "Notícia já existe pelo título."
+                )
+
+                return True
+
+            # Verifica pelo link da fonte
+            if link in conteudo_existente:
+
+                print(
+                    "Notícia já existe pelo link."
+                )
+
                 return True
 
     except Exception as erro:
-        print(f"Erro ao verificar duplicata: {erro}")
+
+        print(
+            "Aviso ao verificar duplicata:"
+        )
+
+        print(erro)
 
     return False
 
@@ -189,12 +381,31 @@ def noticia_ja_publicada(service, titulo):
 # PUBLICAR NO BLOGGER
 # ============================================================
 
-def publicar_no_blogger(service, titulo, conteudo):
+def publicar_no_blogger(
+    service,
+    titulo,
+    conteudo,
+    link_fonte,
+):
+
     print("Criando postagem no Blogger...")
+
+    # Acrescenta a fonte ao final
+    conteudo_final = f"""
+{conteudo}
+
+<hr>
+
+<p><strong>Fonte:</strong>
+<a href="{link_fonte}" target="_blank" rel="noopener">
+O Fuxico Gospel
+</a>
+</p>
+"""
 
     post = {
         "title": titulo,
-        "content": conteudo,
+        "content": conteudo_final,
         "labels": [
             "Notícias Gospel",
             "Rádio Luz Gospel",
@@ -211,16 +422,28 @@ def publicar_no_blogger(service, titulo, conteudo):
         .execute()
     )
 
-    print("==========================================")
+    print()
+    print("=" * 50)
     print("POSTAGEM CRIADA COM SUCESSO")
-    print("==========================================")
-    print(f"Título: {resultado.get('title')}")
-    print(f"ID: {resultado.get('id')}")
-    print(f"URL: {resultado.get('url')}")
-    print(f"Rascunho: {BLOGGER_DRAFT}")
-    print("==========================================")
+    print("=" * 50)
 
-    return resultado
+    print(
+        f"Título: {resultado.get('title')}"
+    )
+
+    print(
+        f"ID: {resultado.get('id')}"
+    )
+
+    print(
+        f"URL: {resultado.get('url')}"
+    )
+
+    print(
+        f"Rascunho: {BLOGGER_DRAFT}"
+    )
+
+    print("=" * 50)
 
 
 # ============================================================
@@ -228,45 +451,116 @@ def publicar_no_blogger(service, titulo, conteudo):
 # ============================================================
 
 def main():
-    print("==========================================")
-    print("RÁDIO LUZ GOSPEL - BOT DE NOTÍCIAS")
-    print("==========================================")
 
-    # Conecta ao Blogger
+    print("=" * 50)
+    print("RÁDIO LUZ GOSPEL - BOT DE NOTÍCIAS")
+    print("=" * 50)
+
+    # --------------------------------------------------------
+    # Blogger
+    # --------------------------------------------------------
+
     service = criar_servico_blogger()
 
     print("Conexão com Blogger: OK")
 
-    # Busca notícias
+    # --------------------------------------------------------
+    # Notícias
+    # --------------------------------------------------------
+
     noticias = buscar_noticias()
 
     if not noticias:
-        print("Nenhuma notícia encontrada.")
+
+        print(
+            "Nenhuma notícia encontrada."
+        )
+
         return
 
-    # Processa somente a primeira notícia
-    noticia = noticias[0]
-
-    titulo = noticia["title"]
-
-    # Verifica duplicata
-    if noticia_ja_publicada(service, titulo):
-        return
-
-    # Gera matéria
-    conteudo = gerar_materia(noticia)
-
-    if not conteudo:
-        print("Gemini não retornou conteúdo.")
-        return
-
-    # Publica como rascunho
-    publicar_no_blogger(
-        service,
-        titulo,
-        conteudo,
+    print(
+        f"Notícias encontradas: "
+        f"{len(noticias)}"
     )
 
+    # --------------------------------------------------------
+    # Tentar encontrar uma notícia nova
+    # --------------------------------------------------------
+
+    for item in noticias:
+
+        try:
+
+            noticia = abrir_noticia(
+                item["link"]
+            )
+
+            if not noticia["title"]:
+                continue
+
+            if len(noticia["content"]) < 100:
+
+                print(
+                    "Conteúdo insuficiente. "
+                    "Pulando notícia."
+                )
+
+                continue
+
+            if noticia_ja_publicada(
+                service,
+                noticia["title"],
+                noticia["link"],
+            ):
+
+                continue
+
+            # ------------------------------------------------
+            # Gerar
+            # ------------------------------------------------
+
+            conteudo = gerar_materia(
+                noticia
+            )
+
+            if not conteudo:
+
+                print(
+                    "Gemini não retornou conteúdo."
+                )
+
+                continue
+
+            # ------------------------------------------------
+            # Publicar
+            # ------------------------------------------------
+
+            publicar_no_blogger(
+                service,
+                noticia["title"],
+                conteudo,
+                noticia["link"],
+            )
+
+            return
+
+        except Exception as erro:
+
+            print()
+            print(
+                "Erro ao processar notícia:"
+            )
+            print(erro)
+            print()
+
+    print(
+        "Nenhuma notícia nova pôde ser publicada."
+    )
+
+
+# ============================================================
+# EXECUTAR
+# ============================================================
 
 if __name__ == "__main__":
     main()
