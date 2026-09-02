@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 
 # ============================================================
 # RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS
-# VERSÃO 2.4
+# VERSÃO 2.5
 # ============================================================
 
 
@@ -28,6 +28,9 @@ GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 BLOGGER_REFRESH_TOKEN = os.environ["BLOGGER_REFRESH_TOKEN"]
 
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+
+# Contador de chamadas Gemini nesta execução.
+gemini_calls_this_run = 0
 
 
 # False = publicação automática
@@ -237,6 +240,66 @@ def noticia_ja_existe(
             )
 
             return True
+
+    return False
+
+
+# ============================================================
+# LIMITE DIÁRIO DE PUBLICAÇÕES
+# ============================================================
+
+def contar_publicacoes_hoje(service):
+    """Conta quantas publicações do robô foram feitas hoje."""
+    hoje = datetime.now().date()
+    total = 0
+
+    for status in ("LIVE", "DRAFT"):
+        posts = buscar_posts(service, status)
+
+        for post in posts:
+            labels = post.get("labels", [])
+
+            if BOT_LABEL not in labels:
+                continue
+
+            data_post = (
+                post.get("published")
+                or post.get("updated")
+                or ""
+            )
+
+            if not data_post:
+                continue
+
+            try:
+                data_post = datetime.fromisoformat(
+                    data_post.replace("Z", "+00:00")
+                ).replace(tzinfo=None)
+
+                if data_post.date() == hoje:
+                    total += 1
+
+            except Exception:
+                continue
+
+    return total
+
+
+def limite_diario_atingido(service):
+    total = contar_publicacoes_hoje(service)
+
+    print()
+    print(
+        f"Publicações do robô hoje: "
+        f"{total}/{MAX_POSTS_PER_DAY}"
+    )
+
+    if total >= MAX_POSTS_PER_DAY:
+        print(
+            "Limite diário atingido. "
+            "Gemini não será chamado hoje."
+        )
+        return True
 
     return False
 
@@ -1469,6 +1532,17 @@ def gerar_conteudo_com_gemini(
     noticia
 ):
 
+    global gemini_calls_this_run
+
+    if gemini_calls_this_run >= MAX_GEMINI_CALLS_PER_RUN:
+        print()
+        print(
+            "Limite de chamadas Gemini desta execução atingido."
+        )
+        return None
+
+    gemini_calls_this_run += 1
+
     print()
     print(
         "Gerando título e matéria com Gemini..."
@@ -1804,6 +1878,10 @@ rel="noopener">
 
         "content":
         conteudo_final,
+
+        "labels": [
+            BOT_LABEL
+        ],
     }
 
 
@@ -1891,7 +1969,7 @@ def main():
 
     print(
         "RÁDIO LUZ GOSPEL - "
-        "ROBÔ DE NOTÍCIAS 2.4"
+        "ROBÔ DE NOTÍCIAS 2.5"
     )
 
     print(
@@ -1915,6 +1993,16 @@ def main():
 
     service = conectar_blogger()
 
+    # --------------------------------------------------------
+    # PROTEÇÃO DE COTA DIÁRIA
+    # --------------------------------------------------------
+
+    if limite_diario_atingido(service):
+        print()
+        print(
+            "ROBÔ FINALIZADO SEM CONSULTAR O GEMINI."
+        )
+        return
 
     # --------------------------------------------------------
     # TESTAR CADA FONTE
@@ -2039,10 +2127,16 @@ def main():
                 )
 
                 print(
-                    "Tentando próximo candidato..."
+                    "O robô NÃO tentará outro candidato "
+                    "nesta execução para preservar a cota "
+                    "do Gemini."
                 )
 
-                continue
+                print(
+                    "ROBÔ FINALIZADO SEM PUBLICAÇÃO."
+                )
+
+                return
 
 
             titulo = resultado_gemini[
