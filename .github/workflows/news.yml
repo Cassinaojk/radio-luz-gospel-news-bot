@@ -12,7 +12,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Baixar código do repositório
         uses: actions/checkout@v4
 
@@ -26,38 +25,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Testar acesso ao WordPress
+      - name: Executar o Robô
         env:
-          WP_URL: ${{ secrets.WP_URL }}
-        run: |
-          echo "=========================================="
-          echo "TESTE DE CONEXÃO COM WORDPRESS"
-          echo "=========================================="
-
-          echo ""
-          echo "URL configurada:"
-          echo "$WP_URL"
-
-          echo ""
-          echo "Teste 1 - site principal:"
-          curl -I -L --max-time 30 "$WP_URL/" || true
-
-          echo ""
-          echo "Teste 2 - API REST:"
-          curl -i -L --max-time 30 "$WP_URL/wp-json/" || true
-
-          echo ""
-          echo "=========================================="
-          echo "FIM DO TESTE"
-          echo "=========================================="
-
-      - name: Executar o Robô com Relatório
-        env:
-          WP_URL: ${{ secrets.WP_URL }}
-          WP_USERNAME: ${{ secrets.WP_USERNAME }}
-          WP_APP_PASSWORD: ${{ secrets.WP_APP_PASSWORD }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+          BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
+          set -o pipefail
           python bot/main.py 2>&1 | tee log_erro.txt
 
       - name: Guardar relatório
