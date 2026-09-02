@@ -1,8 +1,13 @@
 import os
 import re
+import json
+import html
+import unicodedata
+from datetime import datetime, timedelta
+from urllib.parse import urljoin, urlparse, urlunparse
+
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -10,40 +15,19 @@ from googleapiclient.discovery import build
 
 # ============================================================
 # RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS
-# VERSÃO 2.2
+# VERSÃO 2.3
 # ============================================================
 
+VERSAO = "2.3"
 
-# ============================================================
-# CONFIGURAÇÕES
-# ============================================================
+# ATENÇÃO:
+# True  = cria rascunho
+# False = PUBLICA AUTOMATICAMENTE
+BLOGGER_DRAFT = False
 
-BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
-
-GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
-GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
-BLOGGER_REFRESH_TOKEN = os.environ["BLOGGER_REFRESH_TOKEN"]
-
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-
-
-# IMPORTANTE:
-# True = cria rascunho
-# False = publica automaticamente
-BLOGGER_DRAFT = True
-
-
-# Quantos links serão analisados por fonte
-MAX_LINKS_PER_SOURCE = 8
-
-
-# Notícias com mais de 30 dias serão ignoradas
+MAX_LINKS_PER_SOURCE = 10
 MAX_AGE_DAYS = 30
-
-
-# ============================================================
-# FONTES
-# ============================================================
+TIMEOUT = 25
 
 FONTES = [
     {
@@ -60,193 +44,180 @@ FONTES = [
     },
 ]
 
+SCOPES = ["https://www.googleapis.com/auth/blogger"]
+
 
 # ============================================================
-# CONEXÃO COM BLOGGER
+# UTILIDADES
+# ============================================================
+
+def normalizar_texto(texto):
+    if not texto:
+        return ""
+
+    texto = unicodedata.normalize("NFKD", texto)
+    texto = "".join(
+        c for c in texto
+        if not unicodedata.combining(c)
+    )
+
+    texto = texto.lower()
+    texto = re.sub(r"\s+", " ", texto)
+    return texto.strip()
+
+
+def limpar_url(url):
+    try:
+        p = urlparse(url)
+        return urlunparse((
+            p.scheme,
+            p.netloc,
+            p.path,
+            "",
+            "",
+            ""
+        ))
+    except Exception:
+        return url
+
+
+def converter_data(valor):
+    if not valor:
+        return None
+
+    valor = str(valor).strip()
+
+    formatos = [
+        "%Y-%m-%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+    ]
+
+    try:
+        return datetime.fromisoformat(
+            valor.replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+    except Exception:
+        pass
+
+    for formato in formatos:
+        try:
+            return datetime.strptime(valor, formato)
+        except Exception:
+            continue
+
+    return None
+
+
+# ============================================================
+# BLOGGER
 # ============================================================
 
 def conectar_blogger():
-
     print("Conectando ao Blogger...")
+
+    client_id = os.environ["GOOGLE_CLIENT_ID"]
+    client_secret = os.environ["GOOGLE_CLIENT_SECRET"]
+    refresh_token = os.environ["BLOGGER_REFRESH_TOKEN"]
 
     credentials = Credentials(
         token=None,
-        refresh_token=BLOGGER_REFRESH_TOKEN,
+        refresh_token=refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        scopes=[
-            "https://www.googleapis.com/auth/blogger"
-        ],
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=SCOPES,
     )
 
     service = build(
         "blogger",
         "v3",
         credentials=credentials,
+        cache_discovery=False,
     )
 
     print("Conexão com Blogger: OK")
-
     return service
 
 
-# ============================================================
-# NORMALIZAR TEXTO
-# ============================================================
-
-def normalizar_texto(texto):
-
-    if not texto:
-        return ""
-
-    return re.sub(
-        r"\s+",
-        " ",
-        texto
-    ).strip().lower()
-
-
-# ============================================================
-# BUSCAR POSTS DO BLOG
-# ============================================================
-
 def buscar_posts(service, status):
+    blog_id = os.environ["BLOGGER_BLOG_ID"]
 
     try:
-
         resposta = (
             service.posts()
             .list(
-                blogId=BLOGGER_BLOG_ID,
+                blogId=blog_id,
                 status=status,
                 maxResults=100,
             )
             .execute()
         )
 
-        return resposta.get(
-            "items",
-            []
-        )
+        return resposta.get("items", [])
 
     except Exception as erro:
-
-        print(
-            f"Erro ao buscar posts {status}: {erro}"
-        )
-
+        print(f"Erro ao buscar posts {status}: {erro}")
         return []
 
 
-# ============================================================
-# VERIFICAR DUPLICIDADE
-# ============================================================
+def noticia_ja_existe(service, titulo, url):
+    titulo_normalizado = normalizar_texto(titulo)
+    url_limpa = limpar_url(url)
 
-def noticia_ja_existe(
-    service,
-    titulo,
-    url
-):
+    for status in ["LIVE", "DRAFT"]:
+        posts = buscar_posts(service, status)
 
-    titulo_normalizado = normalizar_texto(
-        titulo
-    )
-
-    posts = []
-
-    posts.extend(
-        buscar_posts(
-            service,
-            "LIVE"
-        )
-    )
-
-    posts.extend(
-        buscar_posts(
-            service,
-            "DRAFT"
-        )
-    )
-
-    for post in posts:
-
-        titulo_existente = normalizar_texto(
-            post.get(
-                "title",
-                ""
-            )
-        )
-
-        conteudo_existente = post.get(
-            "content",
-            ""
-        )
-
-        if (
-            titulo_normalizado
-            == titulo_existente
-        ):
-
-            print(
-                "Notícia já existe pelo título."
+        for post in posts:
+            titulo_existente = normalizar_texto(
+                post.get("title", "")
             )
 
-            return True
+            conteudo = post.get("content", "")
+            url_existente = limpar_url(url)
 
-        if (
-            url
-            and url in conteudo_existente
-        ):
+            if titulo_normalizado and titulo_normalizado == titulo_existente:
+                print("Notícia já existe pelo título.")
+                return True
 
-            print(
-                "Notícia já existe pela URL."
-            )
-
-            return True
+            if url_limpa and url_limpa in conteudo:
+                print("Notícia já existe pela URL.")
+                return True
 
     return False
 
 
 # ============================================================
-# ACESSAR SITE
+# ACESSO ÀS FONTES
 # ============================================================
 
-def acessar_url(url):
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 "
+        "(KHTML, like Gecko) "
+        "Chrome/131.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,"
+        "application/xml;q=0.9,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+}
 
-    headers = {
 
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(X11; Linux x86_64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/131.0 Safari/537.36"
-        ),
-
-        "Accept": (
-            "text/html,"
-            "application/xhtml+xml,"
-            "application/xml;q=0.9,"
-            "*/*;q=0.8"
-        ),
-
-        "Accept-Language": (
-            "pt-BR,pt;q=0.9,en;q=0.8"
-        ),
-    }
-
+def acessar_fonte(fonte):
     try:
-
         resposta = requests.get(
-            url,
-            headers=headers,
-            timeout=30,
+            fonte["url"],
+            headers=HEADERS,
+            timeout=TIMEOUT,
         )
 
-        print(
-            f"HTTP: {resposta.status_code}"
-        )
+        print(f"HTTP: {resposta.status_code}")
 
         if resposta.status_code != 200:
             return None
@@ -254,1169 +225,1347 @@ def acessar_url(url):
         return resposta.text
 
     except Exception as erro:
+        print(f"Erro ao acessar fonte: {erro}")
+        return None
 
-        print(
-            f"Erro ao acessar URL: {erro}"
+
+def acessar_url(url):
+    try:
+        print(f"Abrindo notícia:")
+        print(url)
+
+        resposta = requests.get(
+            url,
+            headers=HEADERS,
+            timeout=TIMEOUT,
         )
 
+        print(f"HTTP: {resposta.status_code}")
+
+        if resposta.status_code != 200:
+            return None
+
+        return resposta.text
+
+    except Exception as erro:
+        print(f"Erro ao abrir notícia: {erro}")
         return None
 
 
 # ============================================================
-# NORMALIZAR URL
+# FILTROS DE LINKS
 # ============================================================
 
-def normalizar_url(
-    fonte,
-    href
-):
-
-    if not href:
-        return None
-
-    href = href.strip()
-
-    if href.startswith("/"):
-
-        href = (
-            fonte["url"].rstrip("/")
-            + href
-        )
-
-    elif href.startswith("www."):
-
-        href = (
-            "https://"
-            + href
-        )
-
-    if not href.startswith(
-        "http://"
-    ) and not href.startswith(
-        "https://"
-    ):
-
-        return None
-
-    href = href.split(
-        "#",
-        1
-    )[0]
-
-    href = href.rstrip("/")
-
-    return href
+CAMINHOS_BLOQUEADOS = {
+    "",
+    "home",
+    "inicio",
+    "ultimas-noticias",
+    "quem-somos",
+    "fale-conosco",
+    "contato",
+    "contact",
+    "politica-editorial",
+    "politica-de-privacidade",
+    "politica-de-cookies",
+    "termos-de-uso",
+    "termos",
+    "privacy-policy",
+    "cookies",
+    "login",
+    "autor",
+    "author",
+    "tags",
+    "tag",
+    "categoria",
+    "categorias",
+    "category",
+    "search",
+    "buscar",
+    "feed",
+    "rss",
+    "sitemap",
+    "videos",
+    "video",
+    "podcast",
+    "expediente",
+    "anuncie",
+    "sobre",
+    "sobre-nos",
+    "sobre-o-site",
+}
 
 
-# ============================================================
-# VERIFICAR SE LINK É DESTE SITE
-# ============================================================
+def pertence_ao_site(url, fonte):
+    try:
+        host_url = urlparse(url).hostname or ""
+        host_fonte = urlparse(fonte["url"]).hostname or ""
 
-def pertence_ao_site(
-    fonte,
-    url
-):
+        host_url = host_url.lower().removeprefix("www.")
+        host_fonte = host_fonte.lower().removeprefix("www.")
 
-    dominio = (
-        fonte["url"]
-        .replace(
-            "https://",
-            ""
-        )
-        .replace(
-            "http://",
-            ""
-        )
-        .split(
-            "/"
-        )[0]
-        .lower()
-    )
+        return host_url == host_fonte
 
-    dominio_url = (
-        url.replace(
-            "https://",
-            ""
-        )
-        .replace(
-            "http://",
-            ""
-        )
-        .split(
-            "/"
-        )[0]
-        .lower()
-    )
-
-    return (
-        dominio_url
-        == dominio
-    )
+    except Exception:
+        return False
 
 
-# ============================================================
-# FILTRO ESPECÍFICO DE LINKS
-# ============================================================
-
-def link_valido(
-    fonte,
-    url
-):
-
+def link_valido(url, fonte):
     if not url:
         return False
 
-    if not pertence_ao_site(
-        fonte,
-        url
-    ):
+    url = limpar_url(url)
+
+    if not pertence_ao_site(url, fonte):
         return False
 
-    # --------------------------------------------------------
-    # NEWS GOSPEL
-    #
-    # As matérias seguem normalmente:
-    #
-    # /2026/08/nome-da-materia.html
-    # --------------------------------------------------------
+    try:
+        p = urlparse(url)
+        caminho = p.path.strip("/")
 
-    if (
-        fonte["nome"]
-        == "News Gospel"
-    ):
+        if not caminho:
+            return False
 
-        padrao = (
-            r"^https?://"
-            r"www\.newsgospel\.com\.br/"
-            r"\d{4}/\d{2}/"
-            r".+\.html$"
+        partes = [
+            x.lower()
+            for x in caminho.split("/")
+            if x
+        ]
+
+        partes_normalizadas = [
+            normalizar_texto(x).replace(" ", "-")
+            for x in partes
+        ]
+
+        # Arquivos que não são notícias
+        extensoes_bloqueadas = (
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".svg",
+            ".pdf",
+            ".mp4",
+            ".mp3",
         )
 
-        return bool(
-            re.match(
-                padrao,
-                url
-            )
-        )
+        if caminho.lower().endswith(extensoes_bloqueadas):
+            return False
 
-    # --------------------------------------------------------
-    # PEGAR CAMINHO DA URL
-    # --------------------------------------------------------
+        # ====================================================
+        # NEWS GOSPEL
+        # Formato típico:
+        # /2026/08/nome-da-noticia.html
+        # ====================================================
 
-    caminho = re.sub(
-        r"^https?://[^/]+",
-        "",
-        url
-    )
+        if "newsgospel.com.br" in (
+            p.hostname or ""
+        ).lower():
 
-    caminho = (
-        caminho
-        .split("?", 1)[0]
-        .split("#", 1)[0]
-        .strip("/")
-    )
+            if re.match(
+                r"^\d{4}/\d{2}/[^/]+\.html$",
+                caminho,
+                re.IGNORECASE,
+            ):
+                return True
 
-    partes = [
-        p
-        for p in caminho.split("/")
-        if p
-    ]
+            return False
 
-    # Homepage
-    if not partes:
+        # ====================================================
+        # FUXICO GOSPEL
+        # Normalmente notícias ficam dentro de categorias.
+        # Exemplo:
+        # /pastor/nome-da-noticia
+        # /brasil/nome-da-noticia
+        # ====================================================
+
+        if "fuxicogospel.com.br" in (
+            p.hostname or ""
+        ).lower():
+
+            if len(partes) < 2:
+                return False
+
+            if any(
+                parte in CAMINHOS_BLOQUEADOS
+                for parte in partes_normalizadas
+            ):
+                return False
+
+            ultimo = partes_normalizadas[-1]
+
+            if ultimo in CAMINHOS_BLOQUEADOS:
+                return False
+
+            return True
+
+        # ====================================================
+        # UAU GOSPEL
+        # Notícias podem usar slug diretamente na raiz.
+        # ====================================================
+
+        if "uaugospel.com.br" in (
+            p.hostname or ""
+        ).lower():
+
+            ultimo = partes_normalizadas[-1]
+
+            if ultimo in CAMINHOS_BLOQUEADOS:
+                return False
+
+            # Bloqueia páginas claramente institucionais
+            bloqueios = {
+                "quem-somos",
+                "fale-conosco",
+                "contato",
+                "politica-editorial",
+                "politica-de-privacidade",
+                "termos-de-uso",
+                "login",
+            }
+
+            if ultimo in bloqueios:
+                return False
+
+            return True
+
         return False
 
-    primeiro = (
-        partes[0]
-        .lower()
-    )
-
-    ultimo = (
-        partes[-1]
-        .lower()
-    )
-
-    # --------------------------------------------------------
-    # PÁGINAS QUE NUNCA DEVEM SER TRATADAS
-    # COMO NOTÍCIAS
-    # --------------------------------------------------------
-
-    paginas_bloqueadas = {
-
-        "ultimas-noticias",
-        "últimas-notícias",
-
-        "quem-somos",
-        "quem-somos",
-
-        "fale-conosco",
-        "contato",
-        "contact",
-
-        "sobre",
-
-        "politica-de-privacidade",
-        "política-de-privacidade",
-
-        "termos-de-uso",
-
-        "privacy-policy",
-
-        "cookies",
-
-        "login",
-        "cadastro",
-
-        "autor",
-        "autores",
-
-        "tag",
-        "tags",
-
-        "categoria",
-        "categorias",
-
-        "search",
-        "busca",
-
-        "feed",
-        "rss",
-
-        "sitemap",
-
-        "videos",
-        "video",
-
-        "podcast",
-        "podcasts",
-
-        "home",
-    }
-
-    if (
-        ultimo
-        in paginas_bloqueadas
-    ):
+    except Exception:
         return False
 
-    # --------------------------------------------------------
-    # SEÇÕES DO SITE
-    #
-    # Se for apenas:
-    # /pastor
-    #
-    # não é notícia.
-    #
-    # Mas:
-    # /pastor/nome-da-materia
-    #
-    # pode ser notícia.
-    # --------------------------------------------------------
 
-    secoes = {
+def encontrar_links(fonte, html_texto):
+    soup = BeautifulSoup(html_texto, "html.parser")
 
-        "pastor",
-        "pastores",
-
-        "famosos",
-
-        "brasil",
-        "mundo",
-
-        "politica",
-        "política",
-
-        "entretenimento",
-
-        "musica",
-        "música",
-
-        "gospel",
-
-        "noticias",
-        "notícias",
-
-        "eventos",
-
-        "igreja",
-        "igrejas",
-
-        "ministerio",
-        "ministério",
-
-        "cantores",
-        "cantor",
-
-        "artistas",
-        "artista",
-    }
-
-    if (
-        len(partes) == 1
-        and primeiro in secoes
-    ):
-        return False
-
-    # --------------------------------------------------------
-    # EXTENSÕES QUE NÃO SÃO MATÉRIAS
-    # --------------------------------------------------------
-
-    extensoes_bloqueadas = (
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".gif",
-        ".webp",
-        ".svg",
-        ".pdf",
-        ".xml",
-        ".rss",
-        ".mp3",
-        ".mp4",
-    )
-
-    if ultimo.endswith(
-        extensoes_bloqueadas
-    ):
-        return False
-
-    # --------------------------------------------------------
-    # URLs DE ARQUIVO/WORDPRESS
-    # --------------------------------------------------------
-
-    if primeiro in {
-        "wp-content",
-        "wp-admin",
-        "wp-includes",
-        "feed",
-        "comments",
-    }:
-        return False
-
-    return True
-
-
-# ============================================================
-# ENCONTRAR LINKS
-# ============================================================
-
-def encontrar_links(
-    fonte,
-    html
-):
-
-    soup = BeautifulSoup(
-        html,
-        "html.parser"
-    )
-
-    links = []
+    encontrados = []
     vistos = set()
 
-    for a in soup.find_all(
-        "a",
-        href=True
+    def adicionar_links(container):
+        for a in container.find_all("a", href=True):
+            href = a.get("href", "").strip()
+
+            if not href:
+                continue
+
+            if href.startswith((
+                "javascript:",
+                "mailto:",
+                "tel:",
+            )):
+                continue
+
+            url = urljoin(fonte["url"], href)
+            url = limpar_url(url)
+
+            if not link_valido(url, fonte):
+                continue
+
+            if url in vistos:
+                continue
+
+            vistos.add(url)
+            encontrados.append(url)
+
+    # Primeiro tentamos links dentro de <article>.
+    # Isso ajuda a priorizar notícias reais.
+    artigos = soup.find_all("article")
+
+    for artigo in artigos:
+        adicionar_links(artigo)
+
+    # Depois procuramos no restante da página.
+    adicionar_links(soup)
+
+    return encontrados
+
+
+# ============================================================
+# JSON-LD
+# ============================================================
+
+def percorrer_jsonld(obj):
+    if isinstance(obj, dict):
+        yield obj
+
+        for valor in obj.values():
+            yield from percorrer_jsonld(valor)
+
+    elif isinstance(obj, list):
+        for item in obj:
+            yield from percorrer_jsonld(item)
+
+
+def extrair_jsonld(soup):
+    dados_artigo = None
+    data_publicacao = None
+    imagem_jsonld = None
+
+    for script in soup.find_all(
+        "script",
+        type="application/ld+json"
     ):
+        texto = script.string or script.get_text()
 
-        href = a.get(
-            "href",
-            ""
-        )
-
-        url = normalizar_url(
-            fonte,
-            href
-        )
-
-        if not url:
-            continue
-
-        if not link_valido(
-            fonte,
-            url
-        ):
-            continue
-
-        if url in vistos:
-            continue
-
-        vistos.add(url)
-
-        links.append(url)
-
-    print(
-        f"Links de possíveis notícias: "
-        f"{len(links)}"
-    )
-
-    return links
-
-
-# ============================================================
-# EXTRAIR DATA
-# ============================================================
-
-def extrair_data(
-    soup,
-    url
-):
-
-    # --------------------------------------------------------
-    # META TAGS
-    # --------------------------------------------------------
-
-    seletores = [
-
-        {
-            "property":
-            "article:published_time"
-        },
-
-        {
-            "property":
-            "article:published"
-        },
-
-        {
-            "name":
-            "date"
-        },
-
-        {
-            "name":
-            "publishdate"
-        },
-
-        {
-            "itemprop":
-            "datePublished"
-        },
-    ]
-
-    for atributos in seletores:
-
-        elemento = soup.find(
-            "meta",
-            atributos
-        )
-
-        if not elemento:
-            continue
-
-        valor = (
-            elemento.get(
-                "content"
-            )
-            or elemento.get(
-                "datetime"
-            )
-        )
-
-        if not valor:
+        if not texto.strip():
             continue
 
         try:
-
-            return datetime.fromisoformat(
-                valor.replace(
-                    "Z",
-                    "+00:00"
-                )
-            ).replace(
-                tzinfo=None
-            )
-
+            dados = json.loads(texto)
         except Exception:
-            pass
+            continue
 
-    # --------------------------------------------------------
-    # TIME
-    # --------------------------------------------------------
+        for obj in percorrer_jsonld(dados):
+            if not isinstance(obj, dict):
+                continue
 
-    time_tag = soup.find(
-        "time"
-    )
+            tipo = obj.get("@type", "")
 
-    if time_tag:
+            if isinstance(tipo, list):
+                tipos = [
+                    str(x).lower()
+                    for x in tipo
+                ]
+            else:
+                tipos = [str(tipo).lower()]
 
+            eh_artigo = any(
+                x in tipos
+                for x in [
+                    "article",
+                    "newsarticle",
+                    "blogposting",
+                    "reportage",
+                ]
+            )
+
+            if eh_artigo:
+                dados_artigo = obj
+
+                if obj.get("datePublished"):
+                    data_publicacao = obj.get(
+                        "datePublished"
+                    )
+
+                imagem = obj.get("image")
+
+                if isinstance(imagem, str):
+                    imagem_jsonld = imagem
+
+                elif isinstance(imagem, dict):
+                    imagem_jsonld = (
+                        imagem.get("url")
+                        or imagem.get("contentUrl")
+                    )
+
+                elif isinstance(imagem, list):
+                    for item in imagem:
+                        if isinstance(item, str):
+                            imagem_jsonld = item
+                            break
+
+                        if isinstance(item, dict):
+                            imagem_jsonld = (
+                                item.get("url")
+                                or item.get("contentUrl")
+                            )
+                            if imagem_jsonld:
+                                break
+
+                break
+
+        if dados_artigo:
+            break
+
+    return dados_artigo, data_publicacao, imagem_jsonld
+
+
+# ============================================================
+# DATA DA NOTÍCIA
+# ============================================================
+
+def extrair_data(soup, url, dados_artigo=None, data_jsonld=None):
+    # JSON-LD
+    if data_jsonld:
+        data = converter_data(data_jsonld)
+        if data:
+            return data
+
+    # Meta tags
+    metas = [
+        ("meta", {"property": "article:published_time"}),
+        ("meta", {"property": "article:published"}),
+        ("meta", {"name": "date"}),
+        ("meta", {"name": "pubdate"}),
+        ("meta", {"name": "publish_date"}),
+        ("meta", {"itemprop": "datePublished"}),
+    ]
+
+    for tag, atributos in metas:
+        encontrado = soup.find(tag, atributos)
+
+        if encontrado:
+            valor = (
+                encontrado.get("content")
+                or encontrado.get("datetime")
+            )
+
+            data = converter_data(valor)
+
+            if data:
+                return data
+
+    # <time>
+    for time_tag in soup.find_all("time"):
         valor = (
-            time_tag.get(
-                "datetime"
-            )
-            or time_tag.get_text(
-                " ",
-                strip=True
-            )
+            time_tag.get("datetime")
+            or time_tag.get_text(" ", strip=True)
         )
 
-        if valor:
+        data = converter_data(valor)
 
-            try:
+        if data:
+            return data
 
-                return datetime.fromisoformat(
-                    valor.replace(
-                        "Z",
-                        "+00:00"
-                    )
-                ).replace(
-                    tzinfo=None
-                )
-
-            except Exception:
-                pass
-
-    # --------------------------------------------------------
-    # NEWS GOSPEL
-    # DATA NA URL
-    # --------------------------------------------------------
-
-    if (
-        "newsgospel.com.br"
-        in url
-    ):
-
-        resultado = re.search(
+    # News Gospel usa data na URL
+    if "newsgospel.com.br" in url:
+        match = re.search(
             r"/(\d{4})/(\d{2})/",
             url
         )
 
-        if resultado:
-
-            ano = int(
-                resultado.group(1)
-            )
-
-            mes = int(
-                resultado.group(2)
-            )
-
+        if match:
             try:
-
                 return datetime(
-                    ano,
-                    mes,
-                    1
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    1,
                 )
-
             except Exception:
                 pass
 
     return None
 
 
-# ============================================================
-# VERIFICAR DATA
-# ============================================================
-
-def noticia_recente(
-    data
-):
-
+def noticia_recente(data):
     if not data:
-
-        print(
-            "Data não identificada."
-        )
-
-        print(
-            "Aceitando para análise."
-        )
-
-        return True
-
-    limite = (
-        datetime.now()
-        - timedelta(
-            days=MAX_AGE_DAYS
-        )
-    )
-
-    print(
-        f"Data encontrada: {data}"
-    )
-
-    if data < limite:
-
-        print(
-            "Notícia antiga. Pulando."
-        )
-
         return False
+
+    limite = datetime.now() - timedelta(
+        days=MAX_AGE_DAYS
+    )
+
+    if data > datetime.now() + timedelta(days=2):
+        return False
+
+    return data >= limite
+
+
+# ============================================================
+# PÁGINAS INSTITUCIONAIS
+# ============================================================
+
+TITULOS_BLOQUEADOS = [
+    "politica editorial",
+    "padroes eticos",
+    "padroes de etica",
+    "politica de correcoes",
+    "politica de privacidade",
+    "politica de cookies",
+    "quem somos",
+    "fale conosco",
+    "fale com a gente",
+    "contato",
+    "termos de uso",
+    "termos de servico",
+    "ultimas noticias",
+    "sobre nos",
+    "sobre o site",
+    "expediente",
+    "anuncie",
+    "mapa do site",
+    "politica de publicidade",
+]
+
+
+def titulo_bloqueado(titulo):
+    normalizado = normalizar_texto(titulo)
+
+    for frase in TITULOS_BLOQUEADOS:
+        if frase in normalizado:
+            return True
+
+    return False
+
+
+# ============================================================
+# IMAGEM
+# ============================================================
+
+def imagem_valida(url):
+    if not url:
+        return False
+
+    url = url.strip()
+
+    if not url.startswith(("http://", "https://")):
+        return False
+
+    bloqueios = [
+        "logo",
+        "favicon",
+        "avatar",
+        "icon",
+        "sprite",
+        "emoji",
+        "gravatar",
+    ]
+
+    url_normalizada = normalizar_texto(url)
+
+    for palavra in bloqueios:
+        if palavra in url_normalizada:
+            return False
 
     return True
 
 
-# ============================================================
-# EXTRAIR CONTEÚDO DA MATÉRIA
-# ============================================================
+def extrair_imagem(soup, url_pagina, imagem_jsonld=None):
+    # 1. Imagem do JSON-LD
+    if imagem_valida(imagem_jsonld):
+        return urljoin(url_pagina, imagem_jsonld)
 
-def extrair_noticia(
-    fonte,
-    url
-):
-
-    print()
-    print(
-        "Abrindo notícia:"
-    )
-    print(url)
-
-    html = acessar_url(
-        url
+    # 2. og:image
+    og_image = soup.find(
+        "meta",
+        property="og:image"
     )
 
-    if not html:
-        return None
+    if og_image:
+        imagem = og_image.get("content")
 
+        if imagem_valida(imagem):
+            return urljoin(
+                url_pagina,
+                imagem
+            )
+
+    # 3. twitter:image
+    twitter_image = soup.find(
+        "meta",
+        attrs={"name": "twitter:image"}
+    )
+
+    if twitter_image:
+        imagem = twitter_image.get("content")
+
+        if imagem_valida(imagem):
+            return urljoin(
+                url_pagina,
+                imagem
+            )
+
+    # 4. Imagem dentro do artigo
+    artigos = soup.find_all("article")
+
+    if artigos:
+        container = max(
+            artigos,
+            key=lambda x: len(
+                x.get_text(" ", strip=True)
+            )
+        )
+
+        imagem = container.find("img")
+
+        if imagem:
+            src = (
+                imagem.get("src")
+                or imagem.get("data-src")
+                or imagem.get("data-lazy-src")
+            )
+
+            if imagem_valida(src):
+                return urljoin(
+                    url_pagina,
+                    src
+                )
+
+    # 5. Primeira imagem grande da página
+    for img in soup.find_all("img"):
+        src = (
+            img.get("src")
+            or img.get("data-src")
+            or img.get("data-lazy-src")
+        )
+
+        if imagem_valida(src):
+            largura = img.get("width", "")
+            altura = img.get("height", "")
+
+            # Se não houver dimensão, ainda aceitamos.
+            if largura and altura:
+                try:
+                    if int(largura) < 200 or int(altura) < 150:
+                        continue
+                except Exception:
+                    pass
+
+            return urljoin(
+                url_pagina,
+                src
+            )
+
+    return None
+
+
+# ============================================================
+# EXTRAÇÃO DA NOTÍCIA
+# ============================================================
+
+def escolher_container(soup):
+    candidatos = []
+
+    for artigo in soup.find_all("article"):
+        texto = artigo.get_text(
+            " ",
+            strip=True
+        )
+
+        if len(texto) >= 500:
+            candidatos.append(artigo)
+
+    if candidatos:
+        return max(
+            candidatos,
+            key=lambda x: len(
+                x.get_text(" ", strip=True)
+            )
+        )
+
+    seletores = [
+        ".entry-content",
+        ".post-content",
+        ".article-content",
+        ".single-post-content",
+        ".td-post-content",
+        ".content-post",
+        "main",
+    ]
+
+    candidatos = []
+
+    for seletor in seletores:
+        for elemento in soup.select(seletor):
+            texto = elemento.get_text(
+                " ",
+                strip=True
+            )
+
+            if len(texto) >= 500:
+                candidatos.append(elemento)
+
+    if candidatos:
+        return max(
+            candidatos,
+            key=lambda x: len(
+                x.get_text(" ", strip=True)
+            )
+        )
+
+    return None
+
+
+def extrair_noticia(fonte, url, html_texto):
     soup = BeautifulSoup(
-        html,
+        html_texto,
         "html.parser"
     )
 
-    data = extrair_data(
-        soup,
-        url
+    dados_artigo, data_jsonld, imagem_jsonld = (
+        extrair_jsonld(soup)
     )
 
-    if not noticia_recente(
-        data
-    ):
-        return None
+    # Título
+    titulo = ""
 
-    # --------------------------------------------------------
-    # TÍTULO
-    # --------------------------------------------------------
-
-    titulo = None
-
-    h1 = soup.find(
-        "h1"
-    )
+    h1 = soup.find("h1")
 
     if h1:
-
         titulo = h1.get_text(
             " ",
             strip=True
         )
 
-    if not titulo:
-
-        titulo_tag = soup.find(
-            "title"
+    if not titulo and dados_artigo:
+        titulo = dados_artigo.get(
+            "headline",
+            ""
         )
 
-        if titulo_tag:
+    if not titulo:
+        og_title = soup.find(
+            "meta",
+            property="og:title"
+        )
 
+        if og_title:
+            titulo = og_title.get(
+                "content",
+                ""
+            )
+
+    if not titulo:
+        titulo_tag = soup.find("title")
+
+        if titulo_tag:
             titulo = titulo_tag.get_text(
                 " ",
                 strip=True
             )
 
+    titulo = re.sub(
+        r"\s+",
+        " ",
+        titulo
+    ).strip()
+
     if not titulo:
-
-        print(
-            "Título não encontrado."
-        )
-
+        print("Título não encontrado.")
         return None
 
-    # --------------------------------------------------------
-    # REMOVER ELEMENTOS DESNECESSÁRIOS
-    # --------------------------------------------------------
+    print(f"Título encontrado: {titulo}")
 
-    for elemento in soup([
-        "script",
-        "style",
-        "nav",
-        "footer",
-        "header",
-        "form",
-        "aside",
-        "noscript",
-    ]):
+    # Bloqueio imediato de páginas institucionais
+    if titulo_bloqueado(titulo):
+        print(
+            "Página institucional detectada pelo título. "
+            "Pulando."
+        )
+        return None
 
+    data = extrair_data(
+        soup,
+        url,
+        dados_artigo,
+        data_jsonld,
+    )
+
+    if data:
+        print(
+            "Data encontrada:",
+            data.strftime("%Y-%m-%d")
+        )
+
+        if not noticia_recente(data):
+            print("Notícia antiga. Pulando.")
+            return None
+    else:
+        print("Data não identificada.")
+
+    # Seleciona a área principal
+    container = escolher_container(soup)
+
+    if container:
+        elementos_remover = container.find_all(
+            [
+                "script",
+                "style",
+                "nav",
+                "footer",
+                "header",
+                "form",
+                "aside",
+                "noscript",
+                "iframe",
+            ]
+        )
+    else:
+        elementos_remover = soup.find_all(
+            [
+                "script",
+                "style",
+                "nav",
+                "footer",
+                "header",
+                "form",
+                "aside",
+                "noscript",
+                "iframe",
+            ]
+        )
+
+    for elemento in elementos_remover:
         elemento.decompose()
 
-    # --------------------------------------------------------
-    # PARÁGRAFOS
-    # --------------------------------------------------------
+    if container:
+        paragrafos = container.find_all("p")
+    else:
+        paragrafos = soup.find_all("p")
 
-    paragrafos = []
+    textos = []
+    vistos = set()
 
-    for p in soup.find_all(
-        "p"
-    ):
-
+    for p in paragrafos:
         texto = p.get_text(
             " ",
             strip=True
         )
 
-        if len(texto) >= 40:
+        texto = re.sub(
+            r"\s+",
+            " ",
+            texto
+        ).strip()
 
-            paragrafos.append(
-                texto
-            )
+        if len(texto) < 40:
+            continue
 
-    texto = "\n\n".join(
-        paragrafos
-    )
+        normalizado = normalizar_texto(texto)
 
-    # --------------------------------------------------------
-    # VALIDAÇÃO
-    # --------------------------------------------------------
+        if normalizado in vistos:
+            continue
 
-    if len(texto) < 500:
+        vistos.add(normalizado)
+        textos.append(texto)
 
+    texto_final = "\n\n".join(textos)
+
+    if len(texto_final) < 500:
         print(
-            "Texto insuficiente: "
-            f"{len(texto)} caracteres."
+            f"Texto insuficiente: "
+            f"{len(texto_final)} caracteres."
         )
-
         return None
 
-    if len(texto) > 12000:
+    # Segurança adicional contra páginas institucionais
+    if len(textos) < 4:
+        print(
+            "Poucos parágrafos para caracterizar "
+            "uma notícia. Pulando."
+        )
+        return None
 
-        texto = texto[:12000]
+    # Fontes que exigem características de artigo
+    tem_schema_artigo = dados_artigo is not None
+    tem_container_artigo = container is not None
+
+    if (
+        not data
+        and not tem_schema_artigo
+        and not tem_container_artigo
+        and "newsgospel.com.br" not in url
+    ):
+        print(
+            "Página sem data, schema ou estrutura "
+            "de artigo. Pulando."
+        )
+        return None
+
+    imagem = extrair_imagem(
+        soup,
+        url,
+        imagem_jsonld,
+    )
+
+    if imagem:
+        print("Imagem encontrada:")
+        print(imagem)
+    else:
+        print(
+            "Nenhuma imagem encontrada. "
+            "A postagem será criada sem imagem."
+        )
 
     print(
-        f"Notícia encontrada: "
-        f"{titulo}"
+        f"Notícia encontrada: {titulo}"
     )
 
     print(
         f"Texto extraído: "
-        f"{len(texto)} caracteres"
+        f"{len(texto_final)} caracteres"
     )
 
     return {
-
-        "fonte":
-        fonte["nome"],
-
-        "titulo":
-        titulo,
-
-        "url":
-        url,
-
-        "texto":
-        texto,
-
-        "data":
-        data,
+        "fonte": fonte["nome"],
+        "titulo_original": titulo,
+        "url": url,
+        "data": data,
+        "texto": texto_final[:12000],
+        "imagem": imagem,
     }
 
 
 # ============================================================
-# GERAR MATÉRIA COM GEMINI
+# GEMINI
 # ============================================================
 
-def gerar_noticia_com_gemini(
-    noticia
-):
+def criar_cliente_gemini():
+    chave = os.environ["GEMINI_API_KEY"]
 
-    print()
+    return genai.Client(
+        api_key=chave
+    )
+
+
+def limpar_resposta_gemini(texto):
+    if not texto:
+        return ""
+
+    texto = texto.strip()
+
+    # Remove cercas de Markdown caso o modelo use.
+    texto = re.sub(
+        r"^```(?:html)?\s*",
+        "",
+        texto,
+        flags=re.IGNORECASE,
+    )
+
+    texto = re.sub(
+        r"\s*```$",
+        "",
+        texto,
+        flags=re.IGNORECASE,
+    )
+
+    return texto.strip()
+
+
+def gerar_noticia_com_gemini(noticia):
     print(
         "Gerando notícia com Gemini..."
     )
 
-    client = genai.Client(
-        api_key=GEMINI_API_KEY
-    )
+    client = criar_cliente_gemini()
 
     prompt = f"""
-Você é um jornalista especializado
-em notícias do meio gospel brasileiro.
+Você é jornalista de um portal de notícias gospel brasileiro.
 
-Crie uma nova matéria jornalística
-em português do Brasil com base
-nas informações fornecidas abaixo.
+Reescreva a notícia abaixo de maneira ORIGINAL,
+clara, natural e jornalística para publicação no
+blog Rádio Luz Gospel.
 
-REGRAS:
+REGRAS IMPORTANTES:
 
-1. Escreva com texto original.
-2. Não copie a matéria original.
-3. Não invente informações.
-4. Não invente declarações.
-5. Não invente datas.
-6. Não invente números.
-7. Preserve os fatos presentes na fonte.
-8. Escreva aproximadamente
-   400 a 600 palavras.
-9. Use HTML simples.
-10. Use <p> nos parágrafos.
-11. Use <h2> somente quando necessário.
-12. Não coloque links externos
-    no meio da matéria.
-13. No final, informe a fonte.
-14. Não diga que você é uma IA.
-15. O resultado deve ser somente
-    o conteúdo da matéria, sem
-    comentários adicionais.
+- Não copie frases longas literalmente.
+- Não invente informações.
+- Não invente nomes, números, datas, locais ou declarações.
+- Use somente as informações fornecidas na notícia.
+- Produza aproximadamente 400 a 600 palavras.
+- Escreva em português brasileiro.
+- Crie subtítulos quando fizer sentido.
+- Não use Markdown.
+- Entregue HTML simples.
+- Pode usar <p>, <h2>, <strong> e <blockquote>
+  quando realmente necessário.
+- Não coloque <html>, <head> ou <body>.
+- Não escreva introduções como "Aqui está a notícia".
+- O texto deve estar pronto para ser colocado no Blogger.
+- Ao final, não coloque uma lista de referências.
+- A fonte será adicionada automaticamente.
 
 FONTE:
 {noticia["fonte"]}
 
-URL ORIGINAL:
-{noticia["url"]}
-
 TÍTULO ORIGINAL:
-{noticia["titulo"]}
+{noticia["titulo_original"]}
 
 CONTEÚDO ORIGINAL:
 {noticia["texto"]}
 """
 
     try:
-
-        resposta = (
-            client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt,
-            )
+        resposta = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
         )
 
-        texto = (
+        texto = limpar_resposta_gemini(
             resposta.text
-            or ""
-        ).strip()
+        )
 
         print(
-            f"Texto gerado: "
-            f"{len(texto)} caracteres"
+            f"Texto gerado: {len(texto)} chars"
         )
 
-        if len(texto) < 300:
-
+        if len(texto) < 500:
             print(
-                "Texto gerado muito curto."
+                "Texto gerado pelo Gemini é muito curto."
             )
-
             return None
 
         return texto
 
     except Exception as erro:
-
         print(
             f"Erro no Gemini: {erro}"
         )
-
         return None
 
 
-# ============================================================
-# GERAR TÍTULO
-# ============================================================
+def gerar_titulo(noticia, texto):
+    print("Gerando título...")
 
-def gerar_titulo(
-    noticia
-):
-
-    client = genai.Client(
-        api_key=GEMINI_API_KEY
-    )
+    client = criar_cliente_gemini()
 
     prompt = f"""
-Crie um título jornalístico
-em português do Brasil para
-esta notícia.
+Crie um título jornalístico para uma notícia gospel.
 
 REGRAS:
-
-- Retorne somente o título.
-- Não use aspas desnecessárias.
-- Não invente informações.
-- Não use emojis.
+- Português brasileiro.
+- Natural.
+- Atrativo sem sensacionalismo.
+- Não invente informação.
+- Não use aspas se não forem necessárias.
 - Não coloque ponto final.
+- Entre aproximadamente 50 e 100 caracteres.
+- Responda somente com o título.
 
 Título original:
+{noticia["titulo_original"]}
 
-{noticia["titulo"]}
+Texto:
+{texto[:6000]}
 """
 
     try:
-
-        resposta = (
-            client.models.generate_content(
-                model="gemini-3.6-flash",
-                contents=prompt,
-            )
+        resposta = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
         )
 
         titulo = (
             resposta.text
-            or ""
+            .strip()
+            .replace('"', "")
+            .replace("“", "")
+            .replace("”", "")
+        )
+
+        titulo = re.sub(
+            r"\s+",
+            " ",
+            titulo
         ).strip()
 
-        if titulo:
+        if len(titulo) < 15:
+            return noticia["titulo_original"]
 
-            return titulo
+        print(
+            f"Título novo: {titulo}"
+        )
+
+        return titulo
 
     except Exception as erro:
-
         print(
             f"Erro ao gerar título: {erro}"
         )
 
-    return noticia["titulo"]
+        return noticia["titulo_original"]
 
 
 # ============================================================
-# PUBLICAR NO BLOGGER
+# BLOGGER - PUBLICAÇÃO
 # ============================================================
 
 def publicar_no_blogger(
     service,
     titulo,
     conteudo,
-    noticia
+    noticia,
 ):
+    blog_id = os.environ["BLOGGER_BLOG_ID"]
 
-    print()
-    print(
-        "Enviando notícia para Blogger..."
+    imagem = noticia.get("imagem")
+
+    bloco_imagem = ""
+
+    if imagem:
+        imagem_segura = html.escape(
+            imagem,
+            quote=True
+        )
+
+        bloco_imagem = f"""
+<p>
+  <img
+    src="{imagem_segura}"
+    alt="{html.escape(titulo, quote=True)}"
+    style="max-width:100%;height:auto;"
+  />
+</p>
+"""
+
+    fonte_html = html.escape(
+        noticia["fonte"]
+    )
+
+    url_html = html.escape(
+        noticia["url"],
+        quote=True
     )
 
     conteudo_final = f"""
+{bloco_imagem}
+
 {conteudo}
 
 <hr>
 
 <p>
-<strong>Fonte:</strong>
-{noticia["fonte"]}
+<strong>Fonte:</strong> {fonte_html}
 </p>
 
 <p>
 <strong>Notícia original:</strong>
-<a href="{noticia["url"]}"
-target="_blank"
-rel="noopener">
-{noticia["url"]}
+<a href="{url_html}" target="_blank" rel="noopener noreferrer">
+{url_html}
 </a>
 </p>
 """
 
-    corpo = {
-
-        "kind":
-        "blogger#post",
-
-        "title":
-        titulo,
-
-        "content":
-        conteudo_final,
+    postagem = {
+        "kind": "blogger#post",
+        "title": titulo,
+        "content": conteudo_final.strip(),
     }
 
-    try:
+    print(
+        "Enviando notícia para Blogger..."
+    )
 
-        resposta = (
+    try:
+        resultado = (
             service.posts()
             .insert(
-                blogId=BLOGGER_BLOG_ID,
-                body=corpo,
+                blogId=blog_id,
+                body=postagem,
                 isDraft=BLOGGER_DRAFT,
             )
             .execute()
         )
 
-        if BLOGGER_DRAFT:
+        post_id = resultado.get(
+            "id",
+            "desconhecido"
+        )
 
+        post_url = resultado.get(
+            "url",
+            "URL não retornada"
+        )
+
+        if BLOGGER_DRAFT:
             print(
                 "RASCUNHO CRIADO COM SUCESSO!"
             )
-
         else:
-
             print(
-                "NOTÍCIA PUBLICADA COM SUCESSO!"
+                "PUBLICAÇÃO REALIZADA COM SUCESSO!"
             )
 
         print(
-            f"Título: "
-            f"{resposta.get('title')}"
+            f"Título: {titulo}"
         )
 
         print(
-            f"ID: "
-            f"{resposta.get('id')}"
+            f"ID: {post_id}"
         )
 
         print(
-            f"URL: "
-            f"{resposta.get('url')}"
+            f"URL: {post_url}"
         )
+
+        if imagem:
+            print(
+                "Imagem adicionada à postagem: SIM"
+            )
+        else:
+            print(
+                "Imagem adicionada à postagem: NÃO"
+            )
 
         return True
 
     except Exception as erro:
-
         print(
-            f"Erro ao enviar para Blogger: "
-            f"{erro}"
+            f"Erro ao publicar no Blogger: {erro}"
         )
-
         return False
 
 
 # ============================================================
-# PRINCIPAL
+# PROCESSAMENTO
+# ============================================================
+
+def processar_fonte(
+    service,
+    fonte,
+):
+    print()
+    print(
+        "=" * 60
+    )
+
+    print(
+        f"FONTE: {fonte['nome']}"
+    )
+
+    print(
+        "=" * 60
+    )
+
+    html_fonte = acessar_fonte(
+        fonte
+    )
+
+    if not html_fonte:
+        print(
+            "Não foi possível acessar a fonte."
+        )
+        return False
+
+    links = encontrar_links(
+        fonte,
+        html_fonte
+    )
+
+    print(
+        f"Links de possíveis notícias: "
+        f"{len(links)}"
+    )
+
+    candidatos = links[
+        :MAX_LINKS_PER_SOURCE
+    ]
+
+    print(
+        f"Analisando {len(candidatos)} candidatos..."
+    )
+
+    for url in candidatos:
+        print()
+        print(
+            "-" * 50
+        )
+
+        html_noticia = acessar_url(
+            url
+        )
+
+        if not html_noticia:
+            continue
+
+        noticia = extrair_noticia(
+            fonte,
+            url,
+            html_noticia,
+        )
+
+        if not noticia:
+            continue
+
+        print(
+            "Verificando duplicidade..."
+        )
+
+        if noticia_ja_existe(
+            service,
+            noticia["titulo_original"],
+            noticia["url"],
+        ):
+            print(
+                "Notícia já publicada. Pulando."
+            )
+            continue
+
+        print(
+            "Notícia nova."
+        )
+
+        texto_gerado = (
+            gerar_noticia_com_gemini(
+                noticia
+            )
+        )
+
+        if not texto_gerado:
+            continue
+
+        titulo = gerar_titulo(
+            noticia,
+            texto_gerado,
+        )
+
+        sucesso = publicar_no_blogger(
+            service,
+            titulo,
+            texto_gerado,
+            noticia,
+        )
+
+        if sucesso:
+            return True
+
+    return False
+
+
+# ============================================================
+# MAIN
 # ============================================================
 
 def main():
-
     print()
-    print("=" * 60)
-
     print(
         "RÁDIO LUZ GOSPEL - "
-        "ROBÔ DE NOTÍCIAS 2.2"
+        f"ROBÔ DE NOTÍCIAS {VERSAO}"
     )
 
-    print("=" * 60)
+    print(
+        "Modo:",
+        "RASCUNHO" if BLOGGER_DRAFT
+        else "PUBLICAÇÃO AUTOMÁTICA"
+    )
 
-    service = conectar_blogger()
+    print(
+        "Fontes configuradas:",
+        len(FONTES)
+    )
 
-    # --------------------------------------------------------
-    # TESTAR CADA FONTE
-    # --------------------------------------------------------
+    try:
+        service = conectar_blogger()
+    except Exception as erro:
+        print(
+            f"Erro ao conectar ao Blogger: {erro}"
+        )
+        return
 
     for fonte in FONTES:
-
-        html = acessar_url(
-            fonte["url"]
-        )
-
-        if not html:
-
-            print(
-                "Fonte indisponível."
-            )
-
-            continue
-
-        links = encontrar_links(
-            fonte,
-            html
-        )
-
-        if not links:
-
-            print(
-                "Nenhum link válido "
-                "encontrado nesta fonte."
-            )
-
-            continue
-
-        candidatos = links[
-            :MAX_LINKS_PER_SOURCE
-        ]
-
-        print(
-            f"Analisando "
-            f"{len(candidatos)} "
-            f"candidatos..."
-        )
-
-        # ----------------------------------------------------
-        # ANALISAR CANDIDATOS
-        # ----------------------------------------------------
-
-        for url in candidatos:
-
-            noticia = extrair_noticia(
-                fonte,
-                url
-            )
-
-            if not noticia:
-                continue
-
-            print()
-            print(
-                "Verificando duplicidade..."
-            )
-
-            if noticia_ja_existe(
+        try:
+            sucesso = processar_fonte(
                 service,
-                noticia["titulo"],
-                noticia["url"],
-            ):
-
-                print(
-                    "Notícia duplicada. "
-                    "Pulando."
-                )
-
-                continue
-
-            print(
-                "Notícia nova."
-            )
-
-            # ------------------------------------------------
-            # GEMINI
-            # ------------------------------------------------
-
-            conteudo_gerado = (
-                gerar_noticia_com_gemini(
-                    noticia
-                )
-            )
-
-            if not conteudo_gerado:
-
-                print(
-                    "Não foi possível "
-                    "gerar a matéria."
-                )
-
-                continue
-
-            titulo = gerar_titulo(
-                noticia
-            )
-
-            print(
-                f"Título novo: {titulo}"
-            )
-
-            # ------------------------------------------------
-            # BLOGGER
-            # ------------------------------------------------
-
-            sucesso = (
-                publicar_no_blogger(
-                    service,
-                    titulo,
-                    conteudo_gerado,
-                    noticia,
-                )
+                fonte,
             )
 
             if sucesso:
-
                 print()
                 print(
-                    "ROBÔ FINALIZADO "
-                    "COM SUCESSO."
+                    "ROBÔ FINALIZADO COM SUCESSO."
                 )
-
                 return
 
-    # --------------------------------------------------------
-    # NENHUMA NOTÍCIA
-    # --------------------------------------------------------
+        except Exception as erro:
+            print(
+                f"Erro processando "
+                f"{fonte['nome']}: {erro}"
+            )
 
     print()
     print(
-        "Nenhuma notícia nova "
-        "foi encontrada."
+        "Nenhuma notícia nova foi publicada."
     )
 
     print(
@@ -1424,10 +1573,5 @@ def main():
     )
 
 
-# ============================================================
-# EXECUTAR
-# ============================================================
-
 if __name__ == "__main__":
-
     main()
