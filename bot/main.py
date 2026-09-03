@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import difflib
 import requests
 
 from bs4 import BeautifulSoup
@@ -13,7 +14,7 @@ from googleapiclient.discovery import build
 
 # ============================================================
 # RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS
-# VERSÃO 2.5
+# VERSÃO 2.6
 # ============================================================
 
 
@@ -54,6 +55,16 @@ MAX_AGE_DAYS = 30
 
 
 TIMEOUT = 25
+
+# Qualidade editorial e originalidade.
+MIN_SOURCE_CHARS = 700
+MIN_SOURCE_PARAGRAPHS = 4
+MIN_GENERATED_CHARS = 1000
+MAX_SOURCE_OVERLAP = 0.12
+MAX_TITLE_SIMILARITY = 0.82
+MAX_POST_SIMILARITY = 0.36
+MAX_CONTEXT_ARTICLES = 2
+MAX_CONTEXT_CHARS = 2500
 
 
 # ============================================================
@@ -1486,13 +1497,18 @@ def extrair_noticia(
     # VALIDAÇÃO
     # --------------------------------------------------------
 
-    if len(texto) < 500:
+    if len(paragrafos) < MIN_SOURCE_PARAGRAPHS:
+        print(
+            "Fonte insuficiente: "
+            f"apenas {len(paragrafos)} parágrafos úteis."
+        )
+        return None
 
+    if len(texto) < MIN_SOURCE_CHARS:
         print(
             "Texto insuficiente: "
             f"{len(texto)} caracteres."
         )
-
         return None
 
     if len(texto) > 12000:
@@ -1532,6 +1548,150 @@ def extrair_noticia(
 
 
 # ============================================================
+# FERRAMENTAS DE PESQUISA E ORIGINALIDADE
+# ============================================================
+
+STOPWORDS = {
+    "a", "o", "e", "de", "do", "da", "dos", "das", "em", "no", "na",
+    "nos", "nas", "um", "uma", "uns", "umas", "para", "por", "com",
+    "sem", "que", "se", "ao", "aos", "à", "às", "como", "mais", "menos",
+    "sobre", "entre", "após", "antes", "durante", "já", "também", "foi",
+    "ser", "são", "é", "tem", "teve", "ter", "pelo", "pela", "pelos",
+    "pelas", "seu", "sua", "seus", "suas", "este", "esta", "esse", "essa",
+    "isso", "ele", "ela", "eles", "elas", "ou", "até",
+}
+
+def palavras_relevantes(texto):
+    palavras = re.findall(r"[A-Za-zÀ-ÿ0-9]{4,}", (texto or "").lower())
+    return [p for p in palavras if p not in STOPWORDS]
+
+
+def similaridade_textual(texto_a, texto_b):
+    a = normalizar_texto(BeautifulSoup(texto_a or "", "html.parser").get_text(" ", strip=True))
+    b = normalizar_texto(BeautifulSoup(texto_b or "", "html.parser").get_text(" ", strip=True))
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+def sobreposicao_ngram(texto_a, texto_b, n=6):
+    a = re.findall(r"[a-zà-ÿ0-9]+", normalizar_texto(BeautifulSoup(texto_a or "", "html.parser").get_text(" ", strip=True)))
+    b = re.findall(r"[a-zà-ÿ0-9]+", normalizar_texto(BeautifulSoup(texto_b or "", "html.parser").get_text(" ", strip=True)))
+    if len(a) < n or len(b) < n:
+        return 0.0
+    conjunto_a = {" ".join(a[i:i+n]) for i in range(len(a)-n+1)}
+    conjunto_b = {" ".join(b[i:i+n]) for i in range(len(b)-n+1)}
+    return len(conjunto_a & conjunto_b) / len(conjunto_a) if conjunto_a else 0.0
+
+
+def possui_frase_copiada(texto_gerado, texto_fonte, tamanho=8):
+    a = re.findall(r"[a-zà-ÿ0-9]+", normalizar_texto(BeautifulSoup(texto_gerado or "", "html.parser").get_text(" ", strip=True)))
+    b = re.findall(r"[a-zà-ÿ0-9]+", normalizar_texto(BeautifulSoup(texto_fonte or "", "html.parser").get_text(" ", strip=True)))
+    if len(a) < tamanho or len(b) < tamanho:
+        return False
+    fonte = {" ".join(b[i:i+tamanho]) for i in range(len(b)-tamanho+1)}
+    return any(" ".join(a[i:i+tamanho]) in fonte for i in range(len(a)-tamanho+1))
+
+
+def validar_materia_gerada(noticia, resultado):
+    if not resultado:
+        return False
+    titulo = str(resultado.get("titulo", "")).strip()
+    conteudo = str(resultado.get("conteudo", "")).strip()
+    if not titulo or not conteudo:
+        print("Revisão editorial: título ou conteúdo ausente.")
+        return False
+    texto_gerado = BeautifulSoup(conteudo, "html.parser").get_text(" ", strip=True)
+    texto_fonte = noticia.get("texto", "")
+    if len(texto_gerado) < MIN_GENERATED_CHARS:
+        print("Revisão editorial: matéria gerada muito curta.")
+        return False
+    paragrafos = BeautifulSoup(conteudo, "html.parser").find_all("p")
+    if len(paragrafos) < 4:
+        print("Revisão editorial: poucos parágrafos.")
+        return False
+    similaridade_titulo = similaridade_textual(titulo, noticia["titulo"])
+    if normalizar_texto(titulo) == normalizar_texto(noticia["titulo"]) or similaridade_titulo >= MAX_TITLE_SIMILARITY:
+        print("Revisão editorial: título muito parecido com o original.")
+        return False
+    sobreposicao = sobreposicao_ngram(texto_gerado, texto_fonte, n=6)
+    if sobreposicao > MAX_SOURCE_OVERLAP:
+        print(f"Revisão editorial: sobreposição excessiva com a fonte ({sobreposicao:.1%}).")
+        return False
+    if possui_frase_copiada(texto_gerado, texto_fonte, tamanho=8):
+        print("Revisão editorial: frase longa em comum com a fonte. Publicação bloqueada.")
+        return False
+    if similaridade_textual(texto_gerado, texto_fonte) >= 0.72:
+        print("Revisão editorial: texto aparenta ser reformulação mecânica da fonte.")
+        return False
+    print("Revisão editorial: OK - texto considerado original.")
+    return True
+
+
+def postagem_muito_parecida(service, titulo, conteudo):
+    titulo_normalizado = normalizar_texto(titulo)
+    posts = buscar_posts(service, "LIVE") + buscar_posts(service, "DRAFT")
+    for post in posts:
+        titulo_existente = post.get("title", "")
+        conteudo_existente = post.get("content", "")
+        if titulo_normalizado == normalizar_texto(titulo_existente):
+            print("Revisão de duplicidade: título já utilizado.")
+            return True
+        if similaridade_textual(titulo, titulo_existente) >= 0.88:
+            print("Revisão de duplicidade: títulos muito parecidos.")
+            return True
+        if sobreposicao_ngram(conteudo, conteudo_existente, n=6) >= MAX_POST_SIMILARITY:
+            print("Revisão de duplicidade: conteúdo muito parecido.")
+            return True
+    return False
+
+
+def encontrar_contexto_relacionado(titulo, fonte_principal, html):
+    soup = BeautifulSoup(html, "html.parser")
+    palavras = set(palavras_relevantes(titulo))
+    candidatos = []
+    vistos = set()
+    for a in soup.find_all("a", href=True):
+        url = normalizar_url(fonte_principal, a.get("href", ""))
+        if not url or not link_valido(fonte_principal, url) or url in vistos:
+            continue
+        vistos.add(url)
+        texto_link = a.get_text(" ", strip=True)
+        score = len(palavras.intersection(palavras_relevantes(texto_link + " " + url)))
+        if score > 0:
+            candidatos.append((score, url))
+    candidatos.sort(key=lambda item: item[0], reverse=True)
+    return [url for _, url in candidatos[:4]]
+
+
+def coletar_contexto_verificado(noticia):
+    contexto = []
+    for fonte in FONTES:
+        if fonte["nome"] == noticia["fonte"]:
+            continue
+        html = acessar_url(fonte["url"])
+        if not html:
+            continue
+        urls = encontrar_contexto_relacionado(noticia["titulo"], fonte, html)
+        for url in urls:
+            relacionada = extrair_noticia(fonte, url)
+            if not relacionada:
+                continue
+            texto = relacionada.get("texto", "")
+            if len(texto) < 500:
+                continue
+            contexto.append({
+                "fonte": relacionada["fonte"],
+                "titulo": relacionada["titulo"],
+                "url": relacionada["url"],
+                "texto": texto[:MAX_CONTEXT_CHARS],
+            })
+            if len(contexto) >= MAX_CONTEXT_ARTICLES:
+                return contexto
+    return contexto
+
+
+# ============================================================
 # GERAR TÍTULO + MATÉRIA COM UMA ÚNICA CHAMADA
 # ============================================================
 
@@ -1560,57 +1720,96 @@ def gerar_conteudo_com_gemini(
     )
 
 
+    contexto = coletar_contexto_verificado(noticia)
+
+    bloco_contexto = "NENHUMA FONTE SECUNDÁRIA RELEVANTE FOI ENCONTRADA."
+    if contexto:
+        partes_contexto = []
+        for item in contexto:
+            partes_contexto.append(
+                f"""
+FONTE SECUNDÁRIA: {item["fonte"]}
+TÍTULO: {item["titulo"]}
+URL: {item["url"]}
+INFORMAÇÕES:
+{item["texto"]}
+"""
+            )
+        bloco_contexto = "\n".join(partes_contexto)
+
     prompt = f"""
-Você é um jornalista especializado
-em notícias do meio gospel brasileiro.
+Você é um jornalista profissional especializado em notícias do meio gospel brasileiro.
 
-Crie uma matéria jornalística original
-em português do Brasil com base
-EXCLUSIVAMENTE nas informações
-fornecidas abaixo.
+Sua tarefa NÃO é resumir nem parafrasear mecanicamente uma notícia.
+Faça este processo: FONTE → PESQUISA → APURAÇÃO/CONTEXTUALIZAÇÃO → REDAÇÃO ORIGINAL → REVISÃO → PUBLICAÇÃO.
 
-Você deverá retornar SOMENTE um JSON válido
-com exatamente estes dois campos:
+A notícia principal é a fonte de partida. As fontes secundárias servem para CONFERIR e COMPLEMENTAR quando houver correspondência clara.
 
-{{
-  "titulo": "título jornalístico",
-  "conteudo": "<p>primeiro parágrafo...</p><p>segundo parágrafo...</p>"
-}}
+REGRAS DE APURAÇÃO:
+1. Use somente fatos sustentados pelas informações fornecidas.
+2. Não invente fatos, nomes, datas, números, cargos, declarações ou acontecimentos.
+3. Só acrescente contexto de fontes secundárias quando ele realmente se relacionar ao mesmo assunto.
+4. Não misture pessoas ou acontecimentos diferentes.
+5. Se não houver informação suficiente para uma matéria segura, retorne "publicar": false.
+6. Se as fontes forem contraditórias ou insuficientes, retorne "publicar": false.
+7. Não preencha lacunas com conhecimento presumido.
+
+REGRAS DE ORIGINALIDADE:
+1. Crie título totalmente próprio, sem copiar a estrutura do original.
+2. Crie introdução própria, com outro encadeamento de ideias.
+3. Reescreva completamente a notícia.
+4. NÃO copie frases, períodos ou sequência de parágrafos.
+5. NÃO faça simples substituição de palavras nem tradução.
+6. NÃO mantenha a mesma ordem da fonte quando isso não for necessário.
+7. Evite repetir expressões características do texto original.
+8. O texto deve parecer escrito originalmente para a Rádio Luz Gospel.
+9. Não reproduza citações longas.
+
+REGRAS DE CONTEXTUALIZAÇÃO:
+1. Explique por que o fato é relevante para o leitor.
+2. Acrescente contexto factual somente quando as fontes permitirem.
+3. Quando não houver contexto adicional confiável, não invente.
 
 REGRAS DO TÍTULO:
-
-1. O título deve ser jornalístico.
-2. Deve ser claro e atrativo.
-3. Não invente informações.
-4. Não invente nomes.
-5. Não invente datas.
-6. Não invente números.
-7. Não use emojis.
-8. Não coloque ponto final.
-9. Não use aspas desnecessárias.
+1. Jornalístico, claro, atrativo e original.
+2. Sem clickbait e sem informação inventada.
+3. Sem emojis e sem ponto final.
 
 REGRAS DA MATÉRIA:
+1. Português do Brasil natural.
+2. Aproximadamente 450 a 650 palavras quando houver informação suficiente.
+3. Introdução própria, desenvolvimento contextualizado e conclusão informativa.
+4. HTML simples, somente <p> e, se necessário, <h2>.
+5. Não coloque links externos no meio da matéria.
+6. Não coloque a fonte dentro do conteúdo; o sistema adicionará a identificação.
+7. Não utilize markdown.
 
-1. Escreva texto original.
-2. Não copie a matéria original.
-3. Não invente informações.
-4. Não invente declarações.
-5. Não invente datas.
-6. Não invente números.
-7. Preserve os fatos presentes na fonte.
-8. Escreva aproximadamente 400 a 600 palavras.
-9. Use HTML simples.
-10. Use somente <p> para os parágrafos.
-11. Use <h2> somente quando realmente necessário.
-12. Não coloque links externos no meio da matéria.
-13. No final informe a fonte.
-14. Não diga que você é uma IA.
-15. Não inclua comentários fora do JSON.
-16. O JSON deve ser válido.
-17. Não utilize markdown.
-18. Não coloque ``` antes ou depois do JSON.
+REVISÃO ANTES DE RESPONDER:
+- Título realmente diferente do original?
+- Introdução realmente própria?
+- Matéria reorganizada e reescrita, e não apenas parafraseada?
+- Contexto útil quando disponível?
+- Todos os fatos sustentados pelas fontes?
+- Alguma frase longa copiada?
+- Texto parece tradução ou reformulação mecânica?
+- Há informação suficiente para publicação?
+Se qualquer resposta for negativa, retorne "publicar": false.
 
-FONTE:
+RETORNE SOMENTE JSON VÁLIDO:
+{{
+  "publicar": true,
+  "titulo": "título jornalístico original",
+  "conteudo": "<p>introdução própria...</p><p>desenvolvimento...</p>"
+}}
+
+Se não houver informação suficiente:
+{{
+  "publicar": false,
+  "titulo": "",
+  "conteudo": ""
+}}
+
+FONTE PRINCIPAL:
 {noticia["fonte"]}
 
 URL ORIGINAL:
@@ -1620,9 +1819,11 @@ TÍTULO ORIGINAL:
 {noticia["titulo"]}
 
 CONTEÚDO ORIGINAL:
-{noticia["texto"]}
-"""
+{noticia["texto"][:10000]}
 
+PESQUISA/CONTEXTUALIZAÇÃO VERIFICADA:
+{bloco_contexto}
+"""
 
     try:
 
@@ -1689,6 +1890,13 @@ CONTEÚDO ORIGINAL:
         )
 
 
+        if dados.get("publicar", True) is False:
+            print(
+                "Gemini marcou a notícia como insuficiente "
+                "ou sem segurança para publicação."
+            )
+            return None
+
         titulo = (
             str(
                 dados.get(
@@ -1711,21 +1919,6 @@ CONTEÚDO ORIGINAL:
 
 
         # ----------------------------------------------------
-        # FALLBACK DO TÍTULO
-        # ----------------------------------------------------
-
-        if not titulo:
-
-            titulo = noticia[
-                "titulo"
-            ]
-
-            print(
-                "Título não retornado. "
-                "Usando título original."
-            )
-
-
         conteudo = limpar_html_gemini(
             conteudo
         )
@@ -1976,7 +2169,7 @@ def main():
 
     print(
         "RÁDIO LUZ GOSPEL - "
-        "ROBÔ DE NOTÍCIAS 2.5"
+        "ROBÔ DE NOTÍCIAS 2.6"
     )
 
     print(
@@ -2156,6 +2349,39 @@ def main():
                 ]
             )
 
+            # ------------------------------------------------
+            # REVISÃO DE ORIGINALIDADE E QUALIDADE
+            # ------------------------------------------------
+            if not validar_materia_gerada(
+                noticia,
+                resultado_gemini
+            ):
+                print(
+                    "A matéria foi reprovada na revisão "
+                    "automática de originalidade/qualidade."
+                )
+                print(
+                    "O robô NÃO tentará outro candidato "
+                    "nesta execução."
+                )
+                return
+
+            # ------------------------------------------------
+            # REVISÃO CONTRA PUBLICAÇÕES SEMELHANTES
+            # ------------------------------------------------
+            if postagem_muito_parecida(
+                service,
+                titulo,
+                conteudo_gerado
+            ):
+                print(
+                    "Publicação bloqueada para evitar "
+                    "notícias praticamente iguais."
+                )
+                print(
+                    "ROBÔ FINALIZADO SEM PUBLICAÇÃO."
+                )
+                return
 
             # ------------------------------------------------
             # BLOGGER
