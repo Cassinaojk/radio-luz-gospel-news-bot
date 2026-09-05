@@ -1,4 +1,3 @@
-
 name: Executar Robô de Notícias
 
 on:
@@ -16,7 +15,6 @@ jobs:
   run-bot:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - name: Baixar código do repositório
         uses: actions/checkout@v4
