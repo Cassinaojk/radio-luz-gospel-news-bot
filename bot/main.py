@@ -1,81 +1,48 @@
 import os
 import re
 import json
-import requests
 import time
-from pathlib import Path
-
-from bs4 import BeautifulSoup
+import requests
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
 
 from google import genai
-from google.genai import types
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 
 # ============================================================
 # RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS
-# VERSÃO 3.5 - EDITORIAL ADSENSE + IMAGEM ORIGINAL + 3 FONTES + BUSCA AMPLIADA
-# ============================================================
-
-
-# ============================================================
-# CONFIGURAÇÕES
+# VERSÃO 3.7 - EDITORIAL ADSENSE + IMAGEM ORIGINAL + FILTRO DE NOTÍCIAS + GOSPEL+
 # ============================================================
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
-
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 BLOGGER_REFRESH_TOKEN = os.environ["BLOGGER_REFRESH_TOKEN"]
-
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
-# Contador de chamadas Gemini nesta execução.
-gemini_text_calls_this_run = 0
-
-# Limites de proteção contra excesso de uso do Gemini e publicações.
-MAX_GEMINI_TEXT_CALLS_PER_RUN = 1
 MAX_POSTS_PER_DAY = 3
-
-GITHUB_REPO = "Cassinaojk/radio-luz-gospel-news-bot"
-GITHUB_BRANCH = "main"
-
-# Identificação das publicações feitas pelo robô.
-BOT_LABEL = "Radio Luz Gospel Bot"
-
-
-# False = publicação automática
-# True = cria rascunho
-BLOGGER_DRAFT = False
-
-
-# Quantos links serão analisados por fonte.
-# O robô percorre até 50 candidatos para encontrar uma notícia realmente nova.
+MAX_GEMINI_TEXT_CALLS_PER_RUN = 1
 MAX_LINKS_PER_SOURCE = 50
-
-
-# Notícias com mais de 30 dias serão ignoradas
 MAX_AGE_DAYS = 30
 
-
-TIMEOUT = 25
-
-# Regras editoriais para reduzir conteúdo superficial/reutilizado.
 MIN_SOURCE_CHARS = 700
 MIN_SOURCE_PARAGRAPHS = 4
 MIN_GENERATED_CHARS = 1000
-MAX_SOURCE_OVERLAP = 0.12
+
 MAX_POST_SIMILARITY = 0.38
 MAX_TITLE_SIMILARITY = 0.82
-MAX_CONTEXT_ARTICLES = 2
-MAX_CONTEXT_CHARS = 1800
-MAX_EXACT_PHRASE_WORDS = 20
-MIN_RELEVANT_WORDS_IN_EXACT_PHRASE = 14
+
+BOT_LABEL = "Radio Luz Gospel Bot"
+BLOGGER_DRAFT = False
+
 GEMINI_MODEL_TEXT = "gemini-3.6-flash"
 GEMINI_MODEL_TEXT_FALLBACK = "gemini-3.5-flash-lite"
+
+gemini_calls = 0
 
 
 # ============================================================
@@ -99,12 +66,51 @@ FONTES = [
 
 
 # ============================================================
-# CONEXÃO COM BLOGGER
+# FUNÇÕES BÁSICAS
 # ============================================================
 
-def conectar_blogger():
+def norm(texto):
+    return re.sub(
+        r"\s+",
+        " ",
+        texto or ""
+    ).strip().lower()
 
-    print("Conectando ao Blogger...")
+
+def words(texto):
+    return re.findall(
+        r"\b[\wÀ-ÿ]{3,}\b",
+        norm(texto)
+    )
+
+
+def similar(a, b):
+    return SequenceMatcher(
+        None,
+        norm(a),
+        norm(b)
+    ).ratio()
+
+
+def text_clean(texto):
+    return re.sub(
+        r"\s+",
+        " ",
+        BeautifulSoup(
+            texto or "",
+            "html.parser"
+        ).get_text(
+            " ",
+            strip=True
+        )
+    ).strip()
+
+
+# ============================================================
+# BLOGGER
+# ============================================================
+
+def blogger():
 
     credentials = Credentials(
         token=None,
@@ -117,82 +123,29 @@ def conectar_blogger():
         ],
     )
 
-    service = build(
+    return build(
         "blogger",
         "v3",
-        credentials=credentials,
+        credentials=credentials
     )
 
-    print("Conexão com Blogger: OK")
 
-    return service
-
-
-# ============================================================
-# NORMALIZAR TEXTO
-# ============================================================
-
-def normalizar_texto(texto):
-
-    if not texto:
-        return ""
-
-    return re.sub(
-        r"\s+",
-        " ",
-        texto
-    ).strip().lower()
-
-
-# ============================================================
-# LIMPAR HTML GERADO PELO GEMINI
-# ============================================================
-
-def limpar_html_gemini(texto):
-
-    if not texto:
-        return ""
-
-    texto = texto.strip()
-
-    # Remove bloco markdown ```html ... ```
-    texto = re.sub(
-        r"^```(?:html)?\s*",
-        "",
-        texto,
-        flags=re.IGNORECASE
-    )
-
-    texto = re.sub(
-        r"\s*```$",
-        "",
-        texto
-    )
-
-    return texto.strip()
-
-
-# ============================================================
-# BUSCAR POSTS DO BLOG
-# ============================================================
-
-def buscar_posts(service, status):
+def posts(service, status):
 
     try:
 
-        resposta = (
+        return (
             service.posts()
             .list(
                 blogId=BLOGGER_BLOG_ID,
                 status=status,
-                maxResults=100,
+                maxResults=100
             )
             .execute()
-        )
-
-        return resposta.get(
-            "items",
-            []
+            .get(
+                "items",
+                []
+            )
         )
 
     except Exception as erro:
@@ -204,296 +157,364 @@ def buscar_posts(service, status):
         return []
 
 
-# ============================================================
-# VERIFICAR DUPLICIDADE
-# ============================================================
+def count_today(service):
 
-def noticia_ja_existe(
-    service,
-    titulo,
-    url
-):
-
-    titulo_normalizado = normalizar_texto(
-        titulo
-    )
-
-    posts = []
-
-    posts.extend(
-        buscar_posts(
-            service,
-            "LIVE"
-        )
-    )
-
-    posts.extend(
-        buscar_posts(
-            service,
-            "DRAFT"
-        )
-    )
-
-    for post in posts:
-
-        titulo_existente = normalizar_texto(
-            post.get(
-                "title",
-                ""
-            )
-        )
-
-        conteudo_existente = post.get(
-            "content",
-            ""
-        )
-
-        if (
-            titulo_normalizado
-            == titulo_existente
-        ):
-
-            print(
-                "Notícia já existe pelo título."
-            )
-
-            return True
-
-        if (
-            url
-            and url in conteudo_existente
-        ):
-
-            print(
-                "Notícia já existe pela URL."
-            )
-
-            return True
-
-    return False
-
-
-# ============================================================
-# LIMITE DIÁRIO DE PUBLICAÇÕES
-# ============================================================
-
-def contar_publicacoes_hoje(service):
-    """Conta quantas publicações do robô foram feitas hoje."""
     hoje = datetime.now().date()
+
     total = 0
 
-    for status in ("LIVE", "DRAFT"):
-        posts = buscar_posts(service, status)
+    for status in (
+        "LIVE",
+        "DRAFT"
+    ):
 
-        for post in posts:
-            labels = post.get("labels", [])
+        for post in posts(
+            service,
+            status
+        ):
 
-            if BOT_LABEL not in labels:
+            if BOT_LABEL not in post.get(
+                "labels",
+                []
+            ):
                 continue
 
-            data_post = (
+            data = (
                 post.get("published")
                 or post.get("updated")
                 or ""
             )
 
-            if not data_post:
-                continue
-
             try:
-                data_post = datetime.fromisoformat(
-                    data_post.replace("Z", "+00:00")
-                ).replace(tzinfo=None)
 
-                if data_post.date() == hoje:
+                data = datetime.fromisoformat(
+                    data.replace(
+                        "Z",
+                        "+00:00"
+                    )
+                ).replace(
+                    tzinfo=None
+                )
+
+                if data.date() == hoje:
                     total += 1
 
             except Exception:
-                continue
+                pass
 
     return total
 
 
-def limite_diario_atingido(service):
-    total = contar_publicacoes_hoje(service)
+def exists(
+    service,
+    titulo,
+    url
+):
 
-    print()
-    print(
-        f"Publicações do robô hoje: "
-        f"{total}/{MAX_POSTS_PER_DAY}"
-    )
+    titulo = norm(titulo)
 
-    if total >= MAX_POSTS_PER_DAY:
-        print(
-            "Limite diário atingido. "
-            "Gemini não será chamado hoje."
-        )
-        return True
+    for status in (
+        "LIVE",
+        "DRAFT"
+    ):
+
+        for post in posts(
+            service,
+            status
+        ):
+
+            titulo_existente = norm(
+                post.get(
+                    "title",
+                    ""
+                )
+            )
+
+            conteudo = post.get(
+                "content",
+                ""
+            )
+
+            if titulo == titulo_existente:
+                return True
+
+            if url and url in conteudo:
+                return True
 
     return False
 
 
 # ============================================================
-# ACESSAR SITE
+# ACESSO À INTERNET
 # ============================================================
 
-def acessar_url(url):
+def request_headers():
 
-    headers = {
+    return {
 
-        "User-Agent": (
-            "Mozilla/5.0 "
-            "(X11; Linux x86_64) "
+        "User-Agent":
+            "Mozilla/5.0 (X11; Linux x86_64) "
             "AppleWebKit/537.36 "
             "(KHTML, like Gecko) "
-            "Chrome/131.0 Safari/537.36"
-        ),
+            "Chrome/131.0 Safari/537.36",
 
-        "Accept": (
-            "text/html,"
-            "application/xhtml+xml,"
-            "application/xml;q=0.9,"
-            "*/*;q=0.8"
-        ),
+        "Accept":
+            "text/html,application/xhtml+xml,"
+            "application/xml;q=0.9,*/*;q=0.8",
 
-        "Accept-Language": (
-            "pt-BR,pt;q=0.9,en;q=0.8"
-        ),
+        "Accept-Language":
+            "pt-BR,pt;q=0.9,en;q=0.8",
+
+        "Cache-Control":
+            "no-cache",
+
+        "Pragma":
+            "no-cache",
     }
 
-    try:
 
-        resposta = requests.get(
-            url,
-            headers=headers,
-            timeout=TIMEOUT,
-        )
-
-        print(
-            f"HTTP: {resposta.status_code}"
-        )
-
-        if resposta.status_code != 200:
-            if resposta.status_code in {429, 500, 502, 503, 504}:
-                print("Fonte temporariamente indisponível/limitada. Pulando esta URL.")
-            return None
-
-        return resposta.text
-
-    except Exception as erro:
-
-        print(
-            f"Erro ao acessar fonte: {erro}"
-        )
-
-        return None
-
-
-# ============================================================
-# NORMALIZAR URL
-# ============================================================
-
-def normalizar_url(
-    fonte,
-    href
+def get(
+    url,
+    tries=2
 ):
 
-    if not href:
-        return None
-
-    href = href.strip()
-
-    if href.startswith("/"):
-        href = (
-            fonte["url"].rstrip("/")
-            + href
-        )
-
-    elif href.startswith("www."):
-        href = (
-            "https://"
-            + href
-        )
-
-    if not href.startswith(
-        "http://"
-    ) and not href.startswith(
-        "https://"
+    for tentativa in range(
+        tries
     ):
+
+        try:
+
+            resposta = requests.get(
+                url,
+                headers=request_headers(),
+                timeout=25,
+                allow_redirects=True
+            )
+
+            print(
+                f"HTTP: {resposta.status_code}"
+            )
+
+            if resposta.status_code == 200:
+                return resposta.text
+
+            if (
+                resposta.status_code
+                in {
+                    403,
+                    429,
+                    500,
+                    502,
+                    503,
+                    504
+                }
+                and tentativa + 1 < tries
+            ):
+
+                time.sleep(1.5)
+                continue
+
+            return None
+
+        except Exception as erro:
+
+            print(
+                f"Erro ao acessar fonte: {erro}"
+            )
+
+            if tentativa + 1 < tries:
+                time.sleep(1)
+
+    return None
+
+
+# ============================================================
+# GOSPEL+
+# ============================================================
+
+def gospel_get(url):
+
+    html = get(url)
+
+    if html:
+        return html
+
+    if "gospelmais.com" not in url.lower():
         return None
 
-    href = href.split(
-        "#",
-        1
-    )[0]
+    parsed = urlparse(url)
 
-    href = href.rstrip("/")
+    caminho = parsed.path or "/"
 
-    return href
+    dominios = [
+        "gospelmais.com",
+        "www.gospelmais.com",
+        "noticias.gospelmais.com"
+    ]
+
+    for dominio in dominios:
+
+        alternativa = (
+            f"https://{dominio}"
+            f"{caminho}"
+        )
+
+        if alternativa == url:
+            continue
+
+        print(
+            "Tentando domínio alternativo "
+            f"do Gospel+: {alternativa}"
+        )
+
+        html = get(
+            alternativa,
+            tries=1
+        )
+
+        if html:
+            return html
+
+    return None
 
 
 # ============================================================
-# VERIFICAR SE LINK É DESTE SITE
+# DOMÍNIO
 # ============================================================
 
-def pertence_ao_site(
+def site_ok(
     fonte,
     url
 ):
 
-    dominio = (
-        fonte["url"]
-        .replace(
-            "https://",
-            ""
+    dominio_fonte = (
+        urlparse(
+            fonte["url"]
         )
-        .replace(
-            "http://",
-            ""
-        )
-        .split(
-            "/"
-        )[0]
+        .netloc
         .lower()
     )
 
     dominio_url = (
-        url
-        .replace(
-            "https://",
-            ""
+        urlparse(
+            url
         )
-        .replace(
-            "http://",
-            ""
-        )
-        .split(
-            "/"
-        )[0]
+        .netloc
         .lower()
     )
 
-    if dominio_url == dominio:
-        return True
+    if fonte["nome"] == "Gospel+":
 
-    # Gospel+ pode redirecionar o endereço principal para
-    # noticias.gospelmais.com. Os dois domínios pertencem
-    # à mesma fonte e devem ser tratados como um único site.
-    if fonte.get("nome") == "Gospel+":
         return dominio_url in {
             "gospelmais.com",
             "www.gospelmais.com",
-            "noticias.gospelmais.com",
+            "noticias.gospelmais.com"
         }
 
-    return False
+    return dominio_url == dominio_fonte
 
 
 # ============================================================
-# FILTRO ESPECÍFICO DE LINKS
+# FILTROS
 # ============================================================
 
-def link_valido(
+BLOQUEADOS = {
+
+    "ultimas-noticias",
+    "últimas-notícias",
+
+    "quem-somos",
+    "sobre",
+
+    "fale-conosco",
+    "contato",
+    "contact",
+
+    "politica-de-privacidade",
+    "política-de-privacidade",
+
+    "politica-de-uso-e-privacidade",
+    "política-de-uso-e-privacidade",
+
+    "privacy",
+    "privacy-policy",
+
+    "politica-editorial",
+    "política-editorial",
+
+    "termos-de-uso",
+    "termos",
+
+    "anuncie-aqui",
+    "anuncie",
+    "publicidade",
+    "anuncie-no-site",
+
+    "parceiros",
+    "parceria",
+
+    "expediente",
+
+    "redacao",
+    "redação",
+
+    "newsletter",
+
+    "cookies",
+
+    "login",
+    "cadastro",
+
+    "autor",
+    "autores",
+
+    "tag",
+    "tags",
+
+    "categoria",
+    "categorias",
+
+    "search",
+    "busca",
+
+    "feed",
+    "rss",
+
+    "sitemap",
+
+    "podcast",
+    "podcasts",
+
+    "videos",
+    "video",
+
+    "home",
+
+    "arquivo",
+    "arquivos"
+}
+
+
+NAO_NOTICIA = {
+
+    "category",
+    "categoria",
+    "tag",
+    "author",
+    "autor",
+    "page",
+    "feed",
+    "search",
+    "busca",
+    "wp-content",
+    "wp-json",
+    "arquivo",
+    "arquivos",
+    "date"
+}
+
+
+def valid(
     fonte,
     url
 ):
@@ -501,294 +522,67 @@ def link_valido(
     if not url:
         return False
 
-    if not pertence_ao_site(
+    if not site_ok(
         fonte,
         url
     ):
         return False
 
+    parsed = urlparse(url)
 
-    # --------------------------------------------------------
-    # NEWS GOSPEL
-    # --------------------------------------------------------
-
-    if (
-        fonte["nome"]
-        == "News Gospel"
-    ):
-
-        padrao = (
-            r"^https?://"
-            r"www\.newsgospel\.com\.br/"
-            r"\d{4}/\d{2}/"
-            r".+\.html$"
-        )
-
-        return bool(
-            re.match(
-                padrao,
-                url
-            )
-        )
-
-
-    # --------------------------------------------------------
-    # CAMINHO
-    # --------------------------------------------------------
-
-    caminho = re.sub(
-        r"^https?://[^/]+",
-        "",
-        url
-    )
-
-    caminho = (
-        caminho
-        .split("?", 1)[0]
-        .split("#", 1)[0]
-        .strip("/")
-    )
+    caminho = parsed.path.strip("/")
 
     partes = [
-        p
-        for p in caminho.split("/")
-        if p
+        x
+        for x in caminho.split("/")
+        if x
     ]
 
     if not partes:
         return False
 
-    primeiro = (
-        partes[0]
-        .lower()
-    )
+    ultimo = partes[-1].lower()
 
-    ultimo = (
-        partes[-1]
-        .lower()
-    )
+    if fonte["nome"] == "News Gospel":
 
-
-    # --------------------------------------------------------
-    # PÁGINAS QUE NÃO SÃO NOTÍCIAS
-    # --------------------------------------------------------
-
-    # UAU Gospel possui páginas de categoria, autor e outros
-    # arquivos que podem parecer links de notícias, mas não são
-    # matérias individuais.
-    if fonte.get("nome") == "UAU Gospel":
-        caminhos_nao_noticia = {
-            "category",
-            "categoria",
-            "tag",
-            "author",
-            "autor",
-            "page",
-            "feed",
-            "search",
-            "busca",
-            "wp-content",
-            "wp-json",
-        }
-
-        if primeiro in caminhos_nao_noticia:
-            return False
-
-        # Uma matéria do UAU Gospel deve ser uma página individual
-        # com slug, e não a página inicial.
-        if len(partes) < 1 or not ultimo:
-            return False
-
-    # --------------------------------------------------------
-    # PÁGINAS INSTITUCIONAIS
-    # --------------------------------------------------------
-
-    paginas_bloqueadas = {
-
-        "ultimas-noticias",
-        "últimas-notícias",
-
-        "quem-somos",
-
-        "fale-conosco",
-        "contato",
-        "contact",
-
-        "sobre",
-
-        "politica-de-privacidade",
-        "política-de-privacidade",
-
-        "politica-editorial",
-        "política-editorial",
-
-        "padroes-eticos",
-        "padrões-éticos",
-
-        "politica-de-correcoes",
-        "política-de-correções",
-
-        "termos-de-uso",
-
-        "privacy-policy",
-
-        "cookies",
-
-        "login",
-        "cadastro",
-
-        "autor",
-        "autores",
-
-        "tag",
-        "tags",
-
-        "categoria",
-        "categorias",
-
-        "search",
-        "busca",
-
-        "feed",
-        "rss",
-
-        "sitemap",
-
-        "videos",
-        "video",
-
-        "podcast",
-        "podcasts",
-
-        "home",
-    }
-
-    if ultimo in paginas_bloqueadas:
-        return False
-
-
-    # --------------------------------------------------------
-    # SEÇÕES
-    # --------------------------------------------------------
-
-    secoes = {
-
-        "pastor",
-        "pastores",
-
-        "famosos",
-
-        "brasil",
-        "mundo",
-
-        "politica",
-        "política",
-
-        "entretenimento",
-
-        "musica",
-        "música",
-
-        "gospel",
-
-        "noticias",
-        "notícias",
-
-        "eventos",
-
-        "igreja",
-        "igrejas",
-
-        "ministerio",
-        "ministério",
-
-        "cantores",
-        "cantor",
-
-        "artistas",
-        "artista",
-    }
+        return bool(
+            re.match(
+                r"^/\d{4}/\d{2}/.+\.html$",
+                parsed.path
+            )
+        )
 
     if (
-        len(partes) == 1
-        and primeiro in secoes
+        fonte["nome"] == "UAU Gospel"
+        and partes[0].lower()
+        in NAO_NOTICIA
     ):
         return False
 
+    if ultimo in BLOQUEADOS:
+        return False
 
-    # --------------------------------------------------------
-    # EXTENSÕES
-    # --------------------------------------------------------
+    caminho_lower = caminho.lower()
 
-    extensoes_bloqueadas = (
-
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".gif",
-        ".webp",
-        ".svg",
-        ".pdf",
-        ".xml",
-        ".rss",
-        ".mp3",
-        ".mp4",
-    )
-
-    if ultimo.endswith(
-        extensoes_bloqueadas
+    for trecho in (
+        "/wp-login",
+        "/wp-admin",
+        "/feed/",
+        "/rss/",
+        "/page/"
     ):
-        return False
 
-
-    # --------------------------------------------------------
-    # WORDPRESS
-    # --------------------------------------------------------
-
-    if primeiro in {
-
-        "wp-content",
-        "wp-admin",
-        "wp-includes",
-
-        "feed",
-        "comments",
-    }:
-
-        return False
-
-
-    # --------------------------------------------------------
-    # GOSPEL+
-    # --------------------------------------------------------
-
-    if fonte["nome"] == "Gospel+":
-        # Páginas de categoria, busca, autores e demais áreas
-        # institucionais já são filtradas acima. Aqui evitamos
-        # também URLs que sejam claramente páginas de navegação.
-        if primeiro in {
-            "categoria",
-            "categorias",
-            "autor",
-            "autores",
-            "tag",
-            "tags",
-            "busca",
-            "search",
-            "popular",
-        }:
+        if trecho in caminho_lower:
             return False
-
-
 
     return True
 
 
 # ============================================================
-# ENCONTRAR LINKS
+# LINKS
 # ============================================================
 
-def encontrar_links(
+def links_from_html(
     fonte,
     html
 ):
@@ -798,7 +592,8 @@ def encontrar_links(
         "html.parser"
     )
 
-    links = []
+    resultado = []
+
     vistos = set()
 
     for a in soup.find_all(
@@ -806,98 +601,227 @@ def encontrar_links(
         href=True
     ):
 
-        href = a.get(
-            "href",
-            ""
+        url = urljoin(
+            fonte["url"],
+            a["href"]
         )
 
-        url = normalizar_url(
-            fonte,
-            href
-        )
+        url = url.split(
+            "#",
+            1
+        )[0].rstrip("/")
 
-        if not url:
-            continue
-
-        if not link_valido(
-            fonte,
-            url
+        if (
+            valid(
+                fonte,
+                url
+            )
+            and url not in vistos
         ):
+
+            vistos.add(url)
+            resultado.append(url)
+
+    return resultado
+
+
+def feed_links(fonte):
+
+    if fonte["nome"] == "UAU Gospel":
+
+        bases = [
+
+            fonte["url"],
+
+            "https://www.uaugospel.com.br/feed/",
+
+            "https://www.uaugospel.com.br/"
+            "wp-json/wp/v2/posts?per_page=50"
+        ]
+
+    elif fonte["nome"] == "News Gospel":
+
+        bases = [
+
+            fonte["url"],
+
+            "https://www.newsgospel.com.br/feed/"
+        ]
+
+    else:
+
+        bases = [
+
+            fonte["url"],
+
+            "https://gospelmais.com/feed/",
+
+            "https://www.gospelmais.com/feed/",
+
+            "https://noticias.gospelmais.com/feed/"
+        ]
+
+    resultado = []
+
+    vistos = set()
+
+    for base in bases:
+
+        if fonte["nome"] == "Gospel+":
+
+            html = gospel_get(base)
+
+        else:
+
+            html = get(
+                base,
+                tries=1
+            )
+
+        if not html:
             continue
 
-        if url in vistos:
-            continue
+        if "wp-json/wp/v2/posts" in base:
 
-        vistos.add(url)
+            try:
 
-        links.append(url)
+                data = json.loads(
+                    html
+                )
 
-    print(
-        f"Links de possíveis notícias: "
-        f"{len(links)}"
-    )
+                for item in data:
 
-    return links
+                    url = item.get(
+                        "link"
+                    )
+
+                    if (
+                        url
+                        and valid(
+                            fonte,
+                            url
+                        )
+                        and url not in vistos
+                    ):
+
+                        vistos.add(url)
+                        resultado.append(url)
+
+                continue
+
+            except Exception:
+                pass
+
+        soup = BeautifulSoup(
+            html,
+            "xml"
+        )
+
+        for item in soup.find_all(
+            [
+                "link",
+                "loc"
+            ]
+        ):
+
+            url = item.get_text(
+                "",
+                strip=True
+            )
+
+            if (
+                valid(
+                    fonte,
+                    url
+                )
+                and url not in vistos
+            ):
+
+                vistos.add(url)
+                resultado.append(url)
+
+    return resultado
 
 
-# ============================================================
-# EXTRAIR DATA
-# ============================================================
-
-def extrair_data(
-    soup,
-    url
+def candidates(
+    fonte,
+    home
 ):
+
+    resultado = []
+
+    vistos = set()
+
+    for url in feed_links(
+        fonte
+    ) + links_from_html(
+        fonte,
+        home
+    ):
+
+        if (
+            url not in vistos
+            and valid(
+                fonte,
+                url
+            )
+        ):
+
+            vistos.add(url)
+            resultado.append(url)
+
+    return resultado[
+        :MAX_LINKS_PER_SOURCE
+    ]
+
+
+# ============================================================
+# DATA
+# ============================================================
+
+def date_from(
+    soup
+):
+
+    valores = []
 
     seletores = [
 
-        {
-            "property":
-            "article:published_time"
-        },
+        (
+            "meta[property='article:published_time']",
+            "content"
+        ),
 
-        {
-            "property":
-            "article:published"
-        },
+        (
+            "meta[property='article:modified_time']",
+            "content"
+        ),
 
-        {
-            "name":
-            "date"
-        },
+        (
+            "meta[name='date']",
+            "content"
+        ),
 
-        {
-            "name":
-            "publishdate"
-        },
-
-        {
-            "itemprop":
-            "datePublished"
-        },
+        (
+            "time",
+            "datetime"
+        )
     ]
 
-    for atributos in seletores:
+    for seletor, atributo in seletores:
 
-        elemento = soup.find(
-            "meta",
-            atributos
-        )
+        for item in soup.select(
+            seletor
+        ):
 
-        if not elemento:
-            continue
-
-        valor = (
-            elemento.get(
-                "content"
+            valor = item.get(
+                atributo
             )
-            or elemento.get(
-                "datetime"
-            )
-        )
 
-        if not valor:
-            continue
+            if valor:
+                valores.append(valor)
+
+    for valor in valores:
 
         try:
 
@@ -913,140 +837,19 @@ def extrair_data(
         except Exception:
             pass
 
-
-    time_tag = soup.find(
-        "time"
-    )
-
-    if time_tag:
-
-        valor = (
-            time_tag.get(
-                "datetime"
-            )
-            or time_tag.get_text(
-                " ",
-                strip=True
-            )
+        match = re.search(
+            r"(20\d{2})[-/]([01]\d)[-/]([0-3]\d)",
+            valor
         )
 
-        if valor:
-
-            try:
-
-                return datetime.fromisoformat(
-                    valor.replace(
-                        "Z",
-                        "+00:00"
-                    )
-                ).replace(
-                    tzinfo=None
-                )
-
-            except Exception:
-                pass
-
-
-    # --------------------------------------------------------
-    # JSON-LD
-    # --------------------------------------------------------
-
-    for script in soup.find_all(
-        "script",
-        type="application/ld+json"
-    ):
-
-        try:
-
-            dados = json.loads(
-                script.string
-                or script.get_text()
-            )
-
-        except Exception:
-            continue
-
-        blocos = []
-
-        if isinstance(dados, dict):
-            blocos = [dados]
-
-            if isinstance(
-                dados.get("@graph"),
-                list
-            ):
-                blocos.extend(
-                    dados["@graph"]
-                )
-
-        elif isinstance(dados, list):
-            blocos = dados
-
-        for bloco in blocos:
-
-            if not isinstance(
-                bloco,
-                dict
-            ):
-                continue
-
-            valor = (
-                bloco.get(
-                    "datePublished"
-                )
-                or bloco.get(
-                    "dateCreated"
-                )
-            )
-
-            if not valor:
-                continue
-
-            try:
-
-                return datetime.fromisoformat(
-                    valor.replace(
-                        "Z",
-                        "+00:00"
-                    )
-                ).replace(
-                    tzinfo=None
-                )
-
-            except Exception:
-                pass
-
-
-    # --------------------------------------------------------
-    # NEWS GOSPEL - DATA NA URL
-    # --------------------------------------------------------
-
-    if (
-        "newsgospel.com.br"
-        in url
-    ):
-
-        resultado = re.search(
-            r"/(\d{4})/(\d{2})/",
-            url
-        )
-
-        if resultado:
-
-            ano = int(
-                resultado.group(1)
-            )
-
-            mes = int(
-                resultado.group(2)
-            )
+        if match:
 
             try:
 
                 return datetime(
-                    ano,
-                    mes,
-                    1
+                    int(match.group(1)),
+                    int(match.group(2)),
+                    int(match.group(3))
                 )
 
             except Exception:
@@ -1055,263 +858,65 @@ def extrair_data(
     return None
 
 
-# ============================================================
-# VERIFICAR DATA
-# ============================================================
-
-def noticia_recente(
+def recent(
     data,
-    url=None
+    url=""
 ):
 
     if not data:
 
-        print(
-            "Data não identificada."
-        )
-
-        # Não aceitar páginas de categoria, arquivo, busca ou
-        # outras páginas sem data como se fossem notícias.
-        if url:
-            caminho = re.sub(
-                r"^https?://[^/]+",
-                "",
+        return bool(
+            re.search(
+                r"/20\d{2}/[01]\d/",
                 url
-            ).strip("/").lower()
-
-            primeiros = caminho.split("/")
-            primeiro = primeiros[0] if primeiros else ""
-
-            if primeiro in {
-                "category", "categoria", "tag", "author", "autor",
-                "page", "feed", "search", "busca", "archive",
-                "arquivos"
-            }:
-                print("Página sem data não é uma notícia individual. Pulando.")
-                return False
-
-        print(
-            "Data não identificada; aceitando apenas para "
-            "página que já passou pelo filtro de notícia."
+            )
         )
-        return True
 
-    limite = (
+    idade = (
         datetime.now()
-        - timedelta(
-            days=MAX_AGE_DAYS
-        )
+        - data
     )
 
-    print(
-        f"Data encontrada: {data}"
+    return idade <= timedelta(
+        days=MAX_AGE_DAYS
     )
-
-    if data < limite:
-
-        print(
-            "Notícia antiga. Pulando."
-        )
-
-        return False
-
-    return True
 
 
 # ============================================================
-# EXTRAIR IMAGEM
+# IMAGEM
 # ============================================================
 
-def imagem_valida(url):
-
-    if not url:
-        return False
-
-    url_lower = url.lower()
-
-    if not (
-        url_lower.startswith(
-            "http://"
-        )
-        or url_lower.startswith(
-            "https://"
-        )
-    ):
-        return False
-
-    bloqueios = (
-
-        "favicon",
-        "avatar",
-        "sprite",
-        "emoji",
-        "gravatar",
-    )
-
-    for termo in bloqueios:
-
-        if termo in url_lower:
-            return False
-
-    return True
-
-
-def extrair_imagem(
+def image_of(
     soup
 ):
 
-    # --------------------------------------------------------
-    # JSON-LD
-    # --------------------------------------------------------
+    seletores = [
 
-    for script in soup.find_all(
-        "script",
-        type="application/ld+json"
-    ):
+        (
+            "meta[property='og:image']",
+            "content"
+        ),
 
-        try:
-
-            dados = json.loads(
-                script.string
-                or script.get_text()
-            )
-
-        except Exception:
-            continue
-
-        blocos = []
-
-        if isinstance(dados, dict):
-
-            blocos = [dados]
-
-            if isinstance(
-                dados.get("@graph"),
-                list
-            ):
-
-                blocos.extend(
-                    dados["@graph"]
-                )
-
-        elif isinstance(dados, list):
-
-            blocos = dados
-
-        for bloco in blocos:
-
-            if not isinstance(
-                bloco,
-                dict
-            ):
-                continue
-
-            imagem = bloco.get(
-                "image"
-            )
-
-            if isinstance(
-                imagem,
-                str
-            ):
-
-                if imagem_valida(
-                    imagem
-                ):
-                    return imagem
-
-            if isinstance(
-                imagem,
-                dict
-            ):
-
-                url = imagem.get(
-                    "url"
-                )
-
-                if imagem_valida(
-                    url
-                ):
-                    return url
-
-            if isinstance(
-                imagem,
-                list
-            ):
-
-                for item in imagem:
-
-                    if isinstance(
-                        item,
-                        str
-                    ) and imagem_valida(
-                        item
-                    ):
-                        return item
-
-                    if isinstance(
-                        item,
-                        dict
-                    ):
-
-                        url = item.get(
-                            "url"
-                        )
-
-                        if imagem_valida(
-                            url
-                        ):
-                            return url
-
-
-    # --------------------------------------------------------
-    # OG IMAGE
-    # --------------------------------------------------------
-
-    meta = soup.find(
-        "meta",
-        property="og:image"
-    )
-
-    if meta:
-
-        url = meta.get(
+        (
+            "meta[name='twitter:image']",
             "content"
         )
+    ]
 
-        if imagem_valida(
-            url
-        ):
-            return url
+    for seletor, atributo in seletores:
 
-
-    # --------------------------------------------------------
-    # TWITTER IMAGE
-    # --------------------------------------------------------
-
-    meta = soup.find(
-        "meta",
-        attrs={
-            "name":
-            "twitter:image"
-        }
-    )
-
-    if meta:
-
-        url = meta.get(
-            "content"
+        item = soup.select_one(
+            seletor
         )
 
-        if imagem_valida(
-            url
+        if (
+            item
+            and item.get(atributo)
         ):
-            return url
 
-
-    # --------------------------------------------------------
-    # IMAGENS
-    # --------------------------------------------------------
+            return item.get(
+                atributo
+            ).strip()
 
     for img in soup.find_all(
         "img"
@@ -1323,188 +928,81 @@ def extrair_imagem(
             or img.get("data-lazy-src")
         )
 
-        if imagem_valida(
+        if (
             url
+            and not url.startswith(
+                "data:"
+            )
         ):
+
             return url
 
     return None
 
 
 # ============================================================
-# ESCOLHER CONTAINER DA NOTÍCIA
+# VÍDEOS
 # ============================================================
 
-def escolher_container(
+def videos_of(
     soup
 ):
 
-    candidatos = []
+    resultado = []
 
-    seletores = [
+    vistos = set()
 
-        "article",
-
-        ".entry-content",
-
-        ".post-content",
-
-        ".article-content",
-
-        ".single-content",
-
-        ".td-post-content",
-
-        ".content-post",
-
-        "main",
-    ]
-
-    for seletor in seletores:
-
-        for elemento in soup.select(
-            seletor
-        ):
-
-            texto = elemento.get_text(
-                " ",
-                strip=True
-            )
-
-            if len(texto) >= 500:
-
-                candidatos.append(
-                    elemento
-                )
-
-    if not candidatos:
-        return soup
-
-    candidatos.sort(
-        key=lambda x:
-        len(
-            x.get_text(
-                " ",
-                strip=True
-            )
-        ),
-        reverse=True
-    )
-
-    return candidatos[0]
-
-
-# ============================================================
-# EXTRAIR VÍDEOS DA MATÉRIA
-# ============================================================
-
-def extrair_videos(soup):
-
-    videos = []
-    ids_vistos = set()
-
-    def adicionar_youtube(url):
-
-        if not url:
-            return
-
-        url = url.strip()
-
-        video_id = None
-
-        padroes = [
-            r"(?:youtube\.com/embed/)([A-Za-z0-9_-]{6,})",
-            r"(?:youtube-nocookie\.com/embed/)([A-Za-z0-9_-]{6,})",
-            r"(?:youtube\.com/watch\?v=)([A-Za-z0-9_-]{6,})",
-            r"(?:youtu\.be/)([A-Za-z0-9_-]{6,})",
-            r"(?:youtube\.com/shorts/)([A-Za-z0-9_-]{6,})",
-        ]
-
-        for padrao in padroes:
-
-            encontrado = re.search(
-                padrao,
-                url,
-                re.IGNORECASE,
-            )
-
-            if encontrado:
-                video_id = encontrado.group(1)
-                break
-
-        if not video_id:
-            return
-
-        if video_id in ids_vistos:
-            return
-
-        ids_vistos.add(video_id)
-
-        videos.append(
-            f"https://www.youtube.com/embed/{video_id}"
-        )
-
-    # Iframes incorporados
-    for iframe in soup.find_all("iframe"):
-
-        src = iframe.get("src") or iframe.get("data-src")
-        adicionar_youtube(src)
-
-    # Links do YouTube presentes na matéria
-    for a in soup.find_all("a", href=True):
-        adicionar_youtube(a.get("href"))
-
-    # JSON-LD: VideoObject / embedUrl / contentUrl
-    for script in soup.find_all(
-        "script",
-        type="application/ld+json",
+    for iframe in soup.find_all(
+        "iframe",
+        src=True
     ):
 
-        try:
-            dados = json.loads(script.string or script.get_text())
-        except Exception:
+        url = iframe[
+            "src"
+        ].strip()
+
+        if not any(
+            dominio in url.lower()
+            for dominio in (
+                "youtube.com",
+                "youtu.be",
+                "vimeo.com"
+            )
+        ):
             continue
 
-        blocos = dados if isinstance(dados, list) else [dados]
+        if url in vistos:
+            continue
 
-        for bloco in blocos:
+        vistos.add(url)
 
-            if not isinstance(bloco, dict):
-                continue
+        resultado.append(
+            url
+        )
 
-            tipos = bloco.get("@type", [])
-            if isinstance(tipos, str):
-                tipos = [tipos]
-
-            if "VideoObject" not in tipos:
-                continue
-
-            adicionar_youtube(bloco.get("embedUrl"))
-            adicionar_youtube(bloco.get("contentUrl"))
-            adicionar_youtube(bloco.get("url"))
-
-    return videos
+    return resultado[:3]
 
 
 # ============================================================
-# EXTRAIR CONTEÚDO DA MATÉRIA
+# EXTRAIR NOTÍCIA
 # ============================================================
 
-def extrair_noticia(
+def extract(
     fonte,
     url
 ):
 
-    print()
-    print(
-        "Abrindo notícia:"
-    )
+    if fonte["nome"] == "Gospel+":
 
-    print(url)
+        html = gospel_get(
+            url
+        )
 
-    html = acessar_url(
-        url
-    )
+    else:
+
+        html = get(
+            url
+        )
 
     if not html:
         return None
@@ -1514,798 +1012,424 @@ def extrair_noticia(
         "html.parser"
     )
 
-    data = extrair_data(
-        soup,
-        url
+    data = date_from(
+        soup
     )
 
-    if not noticia_recente(
+    print(
+        f"Data encontrada: {data}"
+    )
+
+    if not recent(
         data,
         url
     ):
+
+        print(
+            "Notícia antiga. Pulando."
+        )
+
         return None
 
+    titulo = ""
 
-    # --------------------------------------------------------
-    # TÍTULO - METADADOS PRIMEIRO
-    # --------------------------------------------------------
+    for seletor in (
+        "meta[property='og:title']",
+        "meta[name='twitter:title']"
+    ):
 
-    titulo = None
-
-    # Muitos portais usam H1 genérico e colocam o título real em
-    # og:title/twitter:title ou em H2/H3. Priorizar metadados evita
-    # publicar o nome do site como título da notícia.
-    for attrs in [
-        {"property": "og:title"},
-        {"name": "twitter:title"},
-    ]:
-        meta = soup.find("meta", attrs)
-        if meta and meta.get("content"):
-            candidato = meta.get("content", "").strip()
-            if candidato:
-                titulo = candidato
-                break
-
-    if not titulo:
-        candidatos_titulo = []
-        for tag_name in ("h1", "h2", "h3"):
-            for tag in soup.find_all(tag_name):
-                candidato = tag.get_text(" ", strip=True)
-                if len(candidato) >= 20:
-                    candidatos_titulo.append(candidato)
-        if candidatos_titulo:
-            titulo = candidatos_titulo[0]
-
-    if not titulo:
-        titulo_tag = soup.find("title")
-        if titulo_tag:
-            titulo = titulo_tag.get_text(" ", strip=True)
-
-    if not titulo:
-        print("Título não encontrado.")
-        return None
-
-
-    # --------------------------------------------------------
-    # IMAGEM
-    # --------------------------------------------------------
-
-    imagem = extrair_imagem(
-        soup
-    )
-
-    if imagem:
-
-        print(
-            "Imagem encontrada:"
+        item = soup.select_one(
+            seletor
         )
 
-        print(imagem)
+        if (
+            item
+            and item.get("content")
+        ):
 
-    else:
+            titulo = item[
+                "content"
+            ].strip()
 
-        print(
-            "Imagem não encontrada."
-        )
+            break
 
+    if not titulo:
 
-    # --------------------------------------------------------
-    # VÍDEOS
-    # --------------------------------------------------------
+        for tag in (
+            "h1",
+            "h2",
+            "h3",
+            "title"
+        ):
 
-    videos = extrair_videos(
-        soup
-    )
-
-    if videos:
-
-        print(
-            f"Vídeos encontrados: {len(videos)}"
-        )
-
-        for video in videos:
-            print(
-                f"YouTube: {video}"
+            item = soup.find(
+                tag
             )
 
-    else:
+            if item:
 
-        print(
-            "Vídeos encontrados: 0"
-        )
+                titulo = text_clean(
+                    item.get_text()
+                )
 
+                if titulo:
+                    break
 
-    # --------------------------------------------------------
-    # REMOVER ELEMENTOS
-    # --------------------------------------------------------
+    if not titulo:
+        return None
 
-    for elemento in soup([
-        "script",
-        "style",
-        "nav",
-        "footer",
-        "header",
-        "form",
-        "aside",
-        "noscript",
-        "iframe",
-    ]):
-
-        elemento.decompose()
-
-
-    # --------------------------------------------------------
-    # CONTAINER
-    # --------------------------------------------------------
-
-    container = escolher_container(
-        soup
+    principal = (
+        soup.find("article")
+        or soup.find("main")
+        or soup.body
     )
 
+    if not principal:
+        return None
 
-    # --------------------------------------------------------
-    # PARÁGRAFOS
-    # --------------------------------------------------------
+    for item in principal.find_all(
+        [
+            "script",
+            "style",
+            "nav",
+            "header",
+            "footer",
+            "aside",
+            "form"
+        ]
+    ):
+
+        item.decompose()
 
     paragrafos = []
 
-    for p in container.find_all(
+    for p in principal.find_all(
         "p"
     ):
 
-        texto = p.get_text(
-            " ",
-            strip=True
+        texto = text_clean(
+            p.get_text(
+                " ",
+                strip=True
+            )
         )
 
-        if len(texto) >= 40:
-
+        if len(texto) >= 45:
             paragrafos.append(
                 texto
             )
 
-    texto = "\n\n".join(
+    texto = "\n".join(
         paragrafos
     )
 
-
-    # --------------------------------------------------------
-    # FALLBACK
-    # --------------------------------------------------------
-
-    if len(texto) < MIN_SOURCE_CHARS:
-
-        paragrafos = []
-
-        for p in soup.find_all(
-            "p"
-        ):
-
-            texto_p = p.get_text(
-                " ",
-                strip=True
-            )
-
-            if len(texto_p) >= 40:
-
-                paragrafos.append(
-                    texto_p
-                )
-
-        texto = "\n\n".join(
-            paragrafos
-        )
-
-
-    # --------------------------------------------------------
-    # VALIDAÇÃO
-    # --------------------------------------------------------
-
-    if len(texto) < MIN_SOURCE_CHARS:
+    if (
+        len(texto)
+        < MIN_SOURCE_CHARS
+        or len(paragrafos)
+        < MIN_SOURCE_PARAGRAPHS
+    ):
 
         print(
-            "Texto insuficiente: "
-            f"{len(texto)} caracteres."
+            "Conteúdo insuficiente. Pulando."
         )
 
         return None
 
-    paragrafos_validos = [
-        p for p in texto.split("\n\n")
-        if len(p.strip()) >= 40
-    ]
-
-    if len(paragrafos_validos) < MIN_SOURCE_PARAGRAPHS:
-        print(
-            "Fonte descartada: poucos parágrafos úteis "
-            f"({len(paragrafos_validos)})."
-        )
-        return None
-
-    if len(texto) > 12000:
-
-        texto = texto[:12000]
-
-    print(
-        "Notícia encontrada: "
-        f"{titulo}"
+    imagem = image_of(
+        soup
     )
 
-    print(
-        "Texto extraído: "
-        f"{len(texto)} caracteres"
+    if not imagem:
+
+        print(
+            "Sem imagem original. Pulando."
+        )
+
+        return None
+
+    imagem = urljoin(
+        url,
+        imagem
     )
 
     return {
 
         "fonte":
-        fonte["nome"],
-
-        "titulo":
-        titulo,
+            fonte["nome"],
 
         "url":
-        url,
+            url,
+
+        "titulo":
+            titulo,
 
         "texto":
-        texto,
+            texto[:12000],
 
         "imagem":
-        imagem,
+            imagem,
 
         "videos":
-        videos,
+            videos_of(soup),
 
         "data":
-        data,
+            data
     }
 
 
-
 # ============================================================
-# CONTROLE DE ORIGINALIDADE E QUALIDADE EDITORIAL
-# ============================================================
-
-def palavras_relevantes(texto):
-    palavras = re.findall(r"[A-Za-zÀ-ÿ0-9]{4,}", normalizar_texto(texto))
-    ignoradas = {
-        "para", "como", "mais", "sobre", "entre", "depois", "antes",
-        "quando", "também", "porque", "pelo", "pela", "pelos", "pelas",
-        "este", "esta", "esse", "essa", "seus", "suas", "com", "uma",
-        "uns", "umas", "eles", "elas", "seu", "sua", "que", "dos", "das",
-        "nas", "nos", "por", "não", "sem", "ainda", "onde", "muito"
-    }
-    return {p for p in palavras if p not in ignoradas}
-
-
-def ngramas(texto, n=6):
-    palavras = re.findall(r"[A-Za-zÀ-ÿ0-9]{3,}", normalizar_texto(texto))
-    return set(" ".join(palavras[i:i+n]) for i in range(max(0, len(palavras)-n+1)))
-
-
-def sobreposicao_textual(a, b, n=6):
-    na = ngramas(a, n)
-    nb = ngramas(b, n)
-    if not na or not nb:
-        return 0.0
-    return len(na & nb) / max(1, len(na))
-
-
-def similaridade_textual(a, b):
-    a = normalizar_texto(a)
-    b = normalizar_texto(b)
-    if not a or not b:
-        return 0.0
-    return SequenceMatcher(None, a[:12000], b[:12000]).ratio()
-
-
-def validar_materia_gerada(noticia, titulo, conteudo):
-    """Bloqueia matérias rasas, cópias e reformulações mecânicas."""
-    texto_limpo = BeautifulSoup(conteudo, "html.parser").get_text(" ", strip=True)
-
-    if len(texto_limpo) < MIN_GENERATED_CHARS:
-        print(f"REPROVADA: matéria muito curta ({len(texto_limpo)} caracteres).")
-        return False
-
-    paragrafos = [
-        p.get_text(" ", strip=True)
-        for p in BeautifulSoup(conteudo, "html.parser").find_all("p")
-        if len(p.get_text(" ", strip=True)) >= 50
-    ]
-
-    if len(paragrafos) < 5:
-        print(f"REPROVADA: poucos parágrafos úteis ({len(paragrafos)}).")
-        return False
-
-    if not titulo or similaridade_textual(titulo, noticia.get("titulo", "")) >= MAX_TITLE_SIMILARITY:
-        print("REPROVADA: título excessivamente parecido com o original.")
-        return False
-
-    sobreposicao = sobreposicao_textual(texto_limpo, noticia.get("texto", ""))
-    print(f"Sobreposição textual com a fonte: {sobreposicao:.3f}")
-    if sobreposicao > MAX_SOURCE_OVERLAP:
-        print("REPROVADA: possível cópia/reformulação mecânica da fonte.")
-        return False
-
-    # Só bloquear uma sequência realmente longa e semanticamente relevante.
-    # Isso evita falsos positivos em nomes, títulos de músicas e expressões
-    # jornalísticas comuns.
-    fonte = normalizar_texto(noticia.get("texto", ""))
-    gerado = normalizar_texto(texto_limpo)
-    palavras = fonte.split()
-    relevantes_fonte = palavras_relevantes(fonte)
-    encontrou_frase = False
-    n = MAX_EXACT_PHRASE_WORDS
-    for i in range(max(0, len(palavras) - n + 1)):
-        trecho_palavras = palavras[i:i+n]
-        trecho = " ".join(trecho_palavras)
-        if trecho in gerado:
-            relevantes = sum(1 for p in trecho_palavras if p in relevantes_fonte)
-            if relevantes >= MIN_RELEVANT_WORDS_IN_EXACT_PHRASE:
-                encontrou_frase = True
-                break
-    if encontrou_frase:
-        print("REPROVADA: frase longa idêntica encontrada na fonte.")
-        return False
-
-    return True
-
-
-def postagem_muito_parecida(service, titulo, conteudo):
-    """Evita uma sequência de posts praticamente iguais no próprio blog."""
-    texto = BeautifulSoup(conteudo, "html.parser").get_text(" ", strip=True)
-    posts = []
-    posts.extend(buscar_posts(service, "LIVE"))
-    posts.extend(buscar_posts(service, "DRAFT"))
-
-    for post in posts:
-        if BOT_LABEL not in post.get("labels", []):
-            continue
-
-        titulo_existente = post.get("title", "")
-        conteudo_existente = BeautifulSoup(
-            post.get("content", ""), "html.parser"
-        ).get_text(" ", strip=True)
-
-        sim_titulo = similaridade_textual(titulo, titulo_existente)
-        sim_texto = similaridade_textual(texto, conteudo_existente)
-        overlap = sobreposicao_textual(texto, conteudo_existente)
-
-        if sim_titulo >= MAX_TITLE_SIMILARITY or sim_texto >= MAX_POST_SIMILARITY or overlap >= 0.28:
-            print("REPROVADA: muito parecida com uma publicação existente.")
-            print(f"Título similaridade: {sim_titulo:.3f}")
-            print(f"Texto similaridade: {sim_texto:.3f}")
-            print(f"N-gram overlap: {overlap:.3f}")
-            return True
-
-    return False
-
-
-def coletar_contexto_verificado(noticia):
-    """Busca até dois textos relacionados em outras fontes configuradas.
-    O contexto é apenas auxiliar; o Gemini deve usar somente fatos verificáveis.
-    """
-    contexto = []
-    termos = palavras_relevantes(noticia.get("titulo", ""))
-
-    if not termos:
-        return contexto
-
-    for fonte in FONTES:
-        if fonte.get("nome") == noticia.get("fonte"):
-            continue
-        if len(contexto) >= MAX_CONTEXT_ARTICLES:
-            break
-
-        # Proteção contra configuração incompleta de uma fonte.
-        fonte_url = fonte.get("url")
-        if not fonte_url:
-            print(
-                f"⚠️ Fonte secundária ignorada: configuração sem URL "
-                f"({fonte.get('nome', 'sem nome')})."
-            )
-            continue
-
-        try:
-            html = acessar_url(fonte_url)
-        except Exception as erro:
-            print(
-                f"⚠️ Não foi possível consultar contexto de "
-                f"{fonte.get('nome', 'fonte')}: {erro}"
-            )
-            continue
-
-        if not html:
-            continue
-
-        soup = BeautifulSoup(html, "html.parser")
-        candidatos = []
-
-        for a in soup.find_all("a", href=True):
-            texto_link = a.get_text(" ", strip=True)
-            try:
-                href = normalizar_url(fonte, a.get("href"))
-            except Exception:
-                href = None
-            if not href or not texto_link or len(texto_link) < 25:
-                continue
-            if not pertence_ao_site(fonte, href):
-                continue
-            palavras_link = palavras_relevantes(texto_link)
-            pontos = len(termos & palavras_link)
-            if pontos >= 2:
-                candidatos.append((pontos, href))
-
-        vistos = set()
-        for _, url in sorted(candidatos, reverse=True):
-            if url in vistos:
-                continue
-            vistos.add(url)
-            item = extrair_noticia(fonte, url)
-            if not item:
-                continue
-            if item["url"] == noticia["url"]:
-                continue
-            contexto.append({
-                "fonte": item["fonte"],
-                "titulo": item["titulo"],
-                "url": item["url"],
-                "texto": item["texto"][:MAX_CONTEXT_CHARS],
-            })
-            break
-
-    return contexto
-
-
-# ============================================================
-# CHAMADA ROBUSTA AO GEMINI
+# GEMINI
 # ============================================================
 
-def chamar_gemini_com_retry(client, prompt):
-    modelos = [GEMINI_MODEL_TEXT, GEMINI_MODEL_TEXT_FALLBACK]
-    ultimo_erro = None
+def prompt(noticia):
 
-    for modelo in modelos:
-        for tentativa in range(3):
-            try:
-                print(f"Gemini: modelo {modelo}, tentativa {tentativa + 1}/3")
-                resposta = client.models.generate_content(
-                    model=modelo,
-                    contents=prompt,
-                )
-                print("HTTP: 200")
-                return resposta
-            except Exception as erro:
-                ultimo_erro = erro
-                mensagem = str(erro)
-                if any(x in mensagem for x in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
-                    espera = 5 * (tentativa + 1)
-                    print(f"Gemini temporariamente indisponível ({modelo}). Aguardando {espera}s...")
-                    time.sleep(espera)
-                    continue
-                print(f"Gemini recusou o modelo {modelo}: {mensagem}")
-                break
+    return f"""
+Você é editor de notícias para um blog gospel brasileiro.
 
-        if modelo == GEMINI_MODEL_TEXT:
-            print(f"Tentativas esgotadas para {modelo}. Tentando modelo reserva: {GEMINI_MODEL_TEXT_FALLBACK}")
+Reescreva a notícia abaixo de forma jornalística, original e adequada ao Google AdSense.
 
-    if ultimo_erro:
-        raise ultimo_erro
-    return None
+NÃO copie frases longas da fonte.
+
+NÃO invente fatos, nomes, datas, números ou declarações.
+
+Use somente informações presentes no texto fornecido.
+
+Gere JSON válido com exatamente estas chaves:
+
+"titulo"
+"conteudo"
+
+O conteúdo deve ser HTML simples.
+
+Use:
+<p>
+<h2> quando necessário
+
+Não use Markdown.
+
+O conteúdo deve ter pelo menos 1000 caracteres.
+
+O título deve ser informativo e diferente do título original.
+
+FONTE:
+{noticia["fonte"]}
+
+TÍTULO ORIGINAL:
+{noticia["titulo"]}
+
+URL:
+{noticia["url"]}
+
+TEXTO ORIGINAL:
+
+{noticia["texto"]}
+"""
 
 
-# ============================================================
-# GERAR TÍTULO + MATÉRIA COM UMA ÚNICA CHAMADA
-# ============================================================
-
-def gerar_conteudo_com_gemini(
+def gemini(
     noticia
 ):
 
-    global gemini_text_calls_this_run
+    global gemini_calls
 
-    if gemini_text_calls_this_run >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
-        print()
+    if (
+        gemini_calls
+        >= MAX_GEMINI_TEXT_CALLS_PER_RUN
+    ):
+
         print(
-            "Limite de chamadas Gemini desta execução atingido."
+            "Limite de chamadas Gemini atingido."
         )
+
         return None
 
-    gemini_text_calls_this_run += 1
-
-    print()
-    print(
-        "Gerando título e matéria com Gemini..."
-    )
-
-    client = genai.Client(
-        api_key=GEMINI_API_KEY
-    )
-
-
-    contexto = coletar_contexto_verificado(noticia)
-
-    contexto_formatado = "\n\n".join(
-        f"FONTE SECUNDÁRIA: {item['fonte']}\nTÍTULO: {item['titulo']}\nURL: {item['url']}\nTEXTO: {item['texto']}"
-        for item in contexto
-    )
-
-    if not contexto_formatado:
-        contexto_formatado = "Nenhuma fonte secundária relacionada foi encontrada. Não invente contexto."
-
-    prompt = f"""
-Você é o editor responsável por uma redação jornalística gospel brasileira.
-
-Fluxo obrigatório: FONTE → PESQUISA → APURAÇÃO/CONTEXTUALIZAÇÃO → REDAÇÃO PRÓPRIA → REVISÃO → PUBLICAÇÃO.
-
-A matéria será publicada em um site que pretende manter alto padrão editorial e futuramente solicitar o Google AdSense. Portanto, NÃO produza conteúdo superficial, copiado, traduzido ou apenas para preencher espaço.
-
-Retorne SOMENTE um JSON válido com:
-{{
-  "publicar": true ou false,
-  "titulo": "título novo",
-  "conteudo": "<p>...</p>..."
-}}
-
-REGRAS OBRIGATÓRIAS:
-1. O texto deve ser uma matéria nova, em português brasileiro natural.
-2. Crie um título próprio, diferente do título da fonte.
-3. Crie uma introdução própria; não comece repetindo a abertura da fonte.
-4. Reescreva a notícia integralmente com estrutura e ordem de informações próprias.
-5. NÃO faça tradução, substituição de sinônimos ou paráfrase frase a frase.
-6. Não copie frases longas da fonte.
-7. Preserve nomes, datas, números e fatos somente quando estiverem sustentados pelas fontes fornecidas.
-8. Não invente declarações, números, datas, locais, links, eventos ou informações biográficas.
-9. Use a fonte secundária apenas quando ela tratar claramente do mesmo assunto e acrescentar um fato verificável.
-10. Não misture pessoas ou acontecimentos de matérias diferentes.
-11. Acrescente contexto jornalístico útil quando houver informação suficiente.
-12. Se as fontes forem insuficientes, contraditórias ou não permitirem uma matéria de qualidade, retorne publicar=false.
-13. Escreva entre 450 e 650 palavras quando publicar=true.
-14. Use pelo menos 5 parágrafos substantivos.
-15. Use somente HTML simples: <p> e, se necessário, <h2>.
-16. Não inclua markdown.
-17. Não coloque links externos dentro do corpo da matéria.
-18. Não escreva observações sobre IA.
-19. Não copie o título ou a introdução da fonte.
-20. A fonte será informada automaticamente pelo sistema após a matéria. Não precisa criar uma seção de fonte.
-
-FONTE PRINCIPAL: {noticia["fonte"]}
-URL PRINCIPAL: {noticia["url"]}
-TÍTULO ORIGINAL: {noticia["titulo"]}
-
-CONTEÚDO DA FONTE PRINCIPAL:
-{noticia["texto"]}
-
-PESQUISA SECUNDÁRIA DISPONÍVEL:
-{contexto_formatado}
-"""
+    gemini_calls += 1
 
     try:
 
-        try:
-            resposta = chamar_gemini_com_retry(client, prompt)
-        except Exception as erro:
-            print(
-                f"Gemini indisponível nesta execução: {erro}"
-            )
-            return None
+        client = genai.Client(
+            api_key=GEMINI_API_KEY
+        )
 
-        if resposta is None:
-            print("Gemini não retornou resposta.")
-            return None
+        resposta = (
+            client.models.generate_content(
+                model=GEMINI_MODEL_TEXT,
+                contents=prompt(
+                    noticia
+                ),
+                config={
+                    "response_mime_type":
+                        "application/json"
+                }
+            )
+        )
 
         bruto = (
             resposta.text
             or ""
         ).strip()
 
-
-        print(
-            f"Resposta do Gemini: "
-            f"{len(bruto)} caracteres"
+        bruto = re.sub(
+            r"^```json\s*|\s*```$",
+            "",
+            bruto,
+            flags=re.IGNORECASE
         )
 
-
-        # ----------------------------------------------------
-        # LIMPAR POSSÍVEL MARKDOWN
-        # ----------------------------------------------------
-
-        bruto = limpar_html_gemini(
+        dados = json.loads(
             bruto
         )
 
-
-        # ----------------------------------------------------
-        # LOCALIZAR JSON
-        # ----------------------------------------------------
-
-        inicio = bruto.find(
-            "{"
+        titulo = text_clean(
+            dados.get(
+                "titulo"
+            )
         )
 
-        fim = bruto.rfind(
-            "}"
+        conteudo = dados.get(
+            "conteudo",
+            ""
         )
+
+        if not titulo:
+            return None
 
         if (
-            inicio == -1
-            or fim == -1
-            or fim <= inicio
+            len(
+                text_clean(
+                    conteudo
+                )
+            )
+            < MIN_GENERATED_CHARS
         ):
 
             print(
-                "Gemini não retornou JSON válido."
+                "Conteúdo gerado muito curto."
             )
 
             return None
 
-
-        bruto_json = bruto[
-            inicio:fim + 1
-        ]
-
-
-        dados = json.loads(
-            bruto_json
-        )
-
-
-        titulo = (
-            str(
-                dados.get(
-                    "titulo",
-                    ""
-                )
+        if (
+            similar(
+                titulo,
+                noticia["titulo"]
             )
-            .strip()
-        )
+            >= MAX_TITLE_SIMILARITY
+        ):
 
-        conteudo = (
-            str(
-                dados.get(
-                    "conteudo",
-                    ""
-                )
+            print(
+                "Título gerado muito parecido "
+                "com o original."
             )
-            .strip()
-        )
 
-
-        publicar = dados.get("publicar", True)
-        if publicar is False:
-            print("Gemini marcou a matéria como não publicável por falta de informação suficiente.")
             return None
-
-        conteudo = limpar_html_gemini(conteudo)
-
-        if not titulo:
-            print("Gemini não retornou título próprio.")
-            return None
-
-        if not validar_materia_gerada(noticia, titulo, conteudo):
-            return None
-
-
-        print(
-            f"Título novo: {titulo}"
-        )
-
-        print(
-            f"Texto gerado: "
-            f"{len(conteudo)} caracteres"
-        )
-
 
         return {
 
             "titulo":
-            titulo,
+                titulo,
 
             "conteudo":
-            conteudo,
+                conteudo
         }
-
-
-    except json.JSONDecodeError as erro:
-
-        print(
-            f"Erro ao interpretar JSON "
-            f"do Gemini: {erro}"
-        )
-
-        print(
-            "Usando título original "
-            "não é suficiente: "
-            "a matéria não será publicada."
-        )
-
-        return None
-
 
     except Exception as erro:
 
-        mensagem = str(
-            erro
-        )
-
         print(
-            f"Erro no Gemini: {mensagem}"
+            f"Erro no Gemini: {erro}"
         )
-
-
-        # ----------------------------------------------------
-        # QUOTA 429
-        # ----------------------------------------------------
-
-        if (
-            "429" in mensagem
-            or "RESOURCE_EXHAUSTED"
-            in mensagem
-            or "quota" in mensagem.lower()
-        ):
-
-            print()
-            print(
-                "QUOTA DO GEMINI EXCEDIDA."
-            )
-
-            print(
-                "A notícia não será publicada "
-                "sem a geração da matéria."
-            )
 
         return None
 
 
 # ============================================================
-# PUBLICAR NO BLOGGER
+# VERIFICAÇÃO DE SIMILARIDADE
 # ============================================================
 
-def publicar_no_blogger(
+def too_similar(
     service,
     titulo,
-    conteudo,
-    noticia
+    conteudo
 ):
 
-    print()
-    print(
-        "Enviando notícia para Blogger..."
-    )
-
-
-    # --------------------------------------------------------
-    # IMAGEM
-    # --------------------------------------------------------
-
-    bloco_imagem = ""
-
-    if noticia.get(
-        "imagem"
+    for status in (
+        "LIVE",
+        "DRAFT"
     ):
 
-        bloco_imagem = f"""
+        for post in posts(
+            service,
+            status
+        ):
+
+            titulo_antigo = post.get(
+                "title",
+                ""
+            )
+
+            if (
+                similar(
+                    titulo,
+                    titulo_antigo
+                )
+                >= MAX_TITLE_SIMILARITY
+            ):
+
+                return True
+
+            conteudo_antigo = text_clean(
+                post.get(
+                    "content",
+                    ""
+                )
+            )
+
+            if (
+                len(conteudo_antigo)
+                > 500
+                and similar(
+                    conteudo,
+                    conteudo_antigo
+                )
+                >= MAX_POST_SIMILARITY
+            ):
+
+                return True
+
+    return False
+
+
+# ============================================================
+# PUBLICAR
+# ============================================================
+
+def publish(
+    service,
+    noticia,
+    resultado
+):
+
+    imagem = f"""
 <p>
-<img src="{noticia["imagem"]}"
-alt="{titulo}"
+<img
+src="{noticia["imagem"]}"
+alt="{resultado["titulo"]}"
 style="max-width:100%;height:auto;"
 loading="lazy">
 </p>
 """
 
+    videos = ""
 
-    # --------------------------------------------------------
-    # VÍDEOS
-    # --------------------------------------------------------
+    for video in noticia[
+        "videos"
+    ]:
 
-    bloco_videos = ""
-
-    for video_url in noticia.get("videos", []):
-
-        bloco_videos += f"""
+        videos += f"""
 <p>
 <iframe
-src="{video_url}"
+src="{video}"
 width="560"
 height="315"
 style="max-width:100%;width:100%;border:0;border-radius:12px;"
@@ -2316,16 +1440,12 @@ loading="lazy">
 </p>
 """
 
-    # --------------------------------------------------------
-    # CONTEÚDO FINAL
-    # --------------------------------------------------------
-
     conteudo_final = f"""
-{bloco_imagem}
+{imagem}
 
-{bloco_videos}
+{videos}
 
-{conteudo}
+{resultado["conteudo"]}
 
 <hr>
 
@@ -2333,26 +1453,20 @@ loading="lazy">
 <strong>Fonte:</strong>
 {noticia["fonte"]}
 </p>
-
 """
-
 
     corpo = {
 
-        "kind":
-        "blogger#post",
-
         "title":
-        titulo,
+            resultado["titulo"],
 
         "content":
-        conteudo_final,
+            conteudo_final,
 
         "labels": [
             BOT_LABEL
-        ],
+        ]
     }
-
 
     try:
 
@@ -2361,11 +1475,10 @@ loading="lazy">
             .insert(
                 blogId=BLOGGER_BLOG_ID,
                 body=corpo,
-                isDraft=BLOGGER_DRAFT,
+                isDraft=BLOGGER_DRAFT
             )
             .execute()
         )
-
 
         if BLOGGER_DRAFT:
 
@@ -2376,62 +1489,33 @@ loading="lazy">
         else:
 
             print(
-                "PUBLICAÇÃO REALIZADA "
-                "COM SUCESSO!"
+                "PUBLICAÇÃO REALIZADA COM SUCESSO!"
             )
 
-
         print(
-            f"Título: "
-            f"{resposta.get('title')}"
+            f"Título: {resposta.get('title')}"
         )
 
         print(
-            f"ID: "
-            f"{resposta.get('id')}"
+            f"URL: {resposta.get('url')}"
         )
 
         print(
-            f"URL: "
-            f"{resposta.get('url')}"
+            "Imagem original da notícia "
+            "adicionada à postagem: SIM"
         )
 
-
-        if noticia.get(
-            "imagem"
-        ):
-
-            print(
-                "Imagem original da notícia adicionada à postagem: SIM"
-            )
-
-        else:
-
-            print(
-                "Imagem original da notícia adicionada à postagem: NÃO"
-            )
-
-        if noticia.get("videos"):
-
-            print(
-                f"Vídeos adicionados à postagem: {len(noticia['videos'])}"
-            )
-
-        else:
-
-            print(
-                "Vídeos adicionados à postagem: 0"
-            )
-
+        print(
+            f"Vídeos adicionados à postagem: "
+            f"{len(noticia['videos'])}"
+        )
 
         return True
-
 
     except Exception as erro:
 
         print(
-            "Erro ao enviar para Blogger: "
-            f"{erro}"
+            f"Erro ao enviar para Blogger: {erro}"
         )
 
         return False
@@ -2444,13 +1528,11 @@ loading="lazy">
 def main():
 
     print()
-    print(
-        "=" * 60
-    )
+    print("=" * 60)
 
     print(
         "RÁDIO LUZ GOSPEL - "
-        "ROBÔ DE NOTÍCIAS 3.5"
+        "ROBÔ DE NOTÍCIAS 3.7"
     )
 
     print(
@@ -2467,150 +1549,115 @@ def main():
         f"{len(FONTES)}"
     )
 
-    print(
-        "=" * 60
+    print("=" * 60)
+
+    service = blogger()
+
+    total_hoje = count_today(
+        service
     )
 
+    print()
+    print(
+        f"Publicações do robô hoje: "
+        f"{total_hoje}/{MAX_POSTS_PER_DAY}"
+    )
 
-    service = conectar_blogger()
+    if total_hoje >= MAX_POSTS_PER_DAY:
 
-    # --------------------------------------------------------
-    # PROTEÇÃO DE COTA DIÁRIA
-    # --------------------------------------------------------
-
-    if limite_diario_atingido(service):
-        print()
         print(
-            "ROBÔ FINALIZADO SEM CONSULTAR O GEMINI."
+            "Limite diário atingido."
         )
-        return
 
-    # --------------------------------------------------------
-    # TESTAR CADA FONTE
-    # --------------------------------------------------------
+        print(
+            "ROBÔ FINALIZADO."
+        )
+
+        return
 
     for fonte in FONTES:
 
         print()
-        print(
-            "=" * 60
-        )
+        print("=" * 60)
 
         print(
             f"FONTE: {fonte['nome']}"
         )
 
-        print(
-            "=" * 60
-        )
+        print("=" * 60)
 
+        if fonte["nome"] == "Gospel+":
 
-        html = acessar_url(
-            fonte["url"]
-        )
+            home = gospel_get(
+                fonte["url"]
+            )
 
+        else:
 
-        if not html:
+            home = get(
+                fonte["url"]
+            )
+
+        if not home:
 
             print(
-                "Não foi possível "
-                "acessar a fonte."
+                "Não foi possível acessar a fonte."
             )
 
             continue
 
-
-        links = encontrar_links(
+        urls = candidates(
             fonte,
-            html
+            home
         )
-
-
-        if not links:
-
-            print(
-                "Nenhum link válido "
-                "encontrado nesta fonte."
-            )
-
-            continue
-
-
-        candidatos = links[
-            :MAX_LINKS_PER_SOURCE
-        ]
-
 
         print(
-            f"Analisando "
-            f"{len(candidatos)} "
-            f"candidatos..."
+            f"Analisando {len(urls)} candidatos..."
         )
 
+        for url in urls:
 
-        # ----------------------------------------------------
-        # ANALISAR CANDIDATOS
-        # ----------------------------------------------------
-
-        for url in candidatos:
-
-            noticia = extrair_noticia(
+            noticia = extract(
                 fonte,
                 url
             )
 
-
             if not noticia:
                 continue
-
 
             print()
             print(
                 "Verificando duplicidade..."
             )
 
-
-            if noticia_ja_existe(
+            if exists(
                 service,
                 noticia["titulo"],
-                noticia["url"],
+                noticia["url"]
             ):
 
                 print(
-                    "Notícia já publicada. "
-                    "Pulando."
+                    "Notícia já publicada. Pulando."
                 )
 
                 continue
-
 
             print(
                 "Notícia nova."
             )
 
-
-            # ------------------------------------------------
-            # GEMINI - UMA ÚNICA CHAMADA
-            # ------------------------------------------------
-
-            resultado_gemini = (
-                gerar_conteudo_com_gemini(
-                    noticia
-                )
+            print(
+                "Consultando Gemini..."
             )
 
+            resultado = gemini(
+                noticia
+            )
 
-            if not resultado_gemini:
-
-                print(
-                    "Não foi possível "
-                    "gerar a matéria."
-                )
+            if not resultado:
 
                 print(
-                    "O robô NÃO tentará outro candidato "
-                    "nesta execução para preservar a cota "
-                    "do Gemini."
+                    "Não foi possível gerar a matéria."
                 )
 
                 print(
@@ -2619,85 +1666,62 @@ def main():
 
                 return
 
-
-            titulo = resultado_gemini[
-                "titulo"
-            ]
-
-            conteudo_gerado = (
-                resultado_gemini[
-                    "conteudo"
-                ]
-            )
-
-
-            # ------------------------------------------------
-            # REVISÃO FINAL DE ORIGINALIDADE
-            # ------------------------------------------------
-
-            if postagem_muito_parecida(
+            if too_similar(
                 service,
-                titulo,
-                conteudo_gerado,
+                resultado["titulo"],
+                resultado["conteudo"]
             ):
+
                 print(
-                    "Publicação cancelada: conteúdo muito parecido com matéria já publicada."
+                    "Publicação cancelada: "
+                    "conteúdo muito parecido "
+                    "com matéria já publicada."
                 )
+
                 return
 
-            # ------------------------------------------------
-            # IMAGEM ORIGINAL DA NOTÍCIA
-            # ------------------------------------------------
+            if not noticia.get(
+                "imagem"
+            ):
 
-            url_imagem = noticia.get("imagem")
+                print(
+                    "Notícia sem imagem original."
+                )
 
-            if url_imagem:
-                print("🖼️ Usando a imagem original da notícia.")
-            else:
-                print("⚠️ Notícia sem imagem original. Publicação cancelada.")
+                print(
+                    "Publicação cancelada."
+                )
+
                 return
 
-            # ------------------------------------------------
-            # BLOGGER
-            # ------------------------------------------------
-
-            sucesso = (
-                publicar_no_blogger(
-                    service,
-                    titulo,
-                    conteudo_gerado,
-                    noticia,
-                )
+            print(
+                "Usando a imagem original da notícia."
             )
 
+            sucesso = publish(
+                service,
+                noticia,
+                resultado
+            )
 
             if sucesso:
 
                 print()
                 print(
-                    "ROBÔ FINALIZADO "
-                    "COM SUCESSO."
+                    "ROBÔ FINALIZADO COM SUCESSO."
                 )
 
                 return
 
-
         print()
         print(
-            f"Nenhuma notícia nova "
-            f"publicada na fonte "
-            f"{fonte['nome']}."
+            f"Nenhuma notícia nova publicada "
+            f"na fonte {fonte['nome']}."
         )
-
-
-    # --------------------------------------------------------
-    # NENHUMA NOTÍCIA
-    # --------------------------------------------------------
 
     print()
     print(
-        "Nenhuma notícia nova "
-        "foi encontrada."
+        "Nenhuma notícia nova foi encontrada."
     )
 
     print(
@@ -2710,5 +1734,4 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-
     main()
