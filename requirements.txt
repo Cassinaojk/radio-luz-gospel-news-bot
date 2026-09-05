@@ -1,0 +1,8 @@
+beautifulsoup4
+requests
+Pillow
+google-genai>=1.71.0
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
