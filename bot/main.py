@@ -2,6 +2,8 @@ import os
 import re
 import json
 import requests
+import subprocess
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
@@ -15,7 +17,7 @@ from googleapiclient.discovery import build
 
 # ============================================================
 # RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS
-# VERSÃO 2.8 - EDITORIAL ADSENSE + IMAGENS ORIGINAIS + VÍDEOS
+# VERSÃO 2.9 - EDITORIAL ADSENSE + IMAGENS ORIGINAIS + VÍDEOS
 # ============================================================
 
 
@@ -68,6 +70,8 @@ MIN_SOURCE_CHARS = 700
 MIN_SOURCE_PARAGRAPHS = 4
 MIN_GENERATED_CHARS = 1000
 MAX_SOURCE_OVERLAP = 0.12
+MAX_EXACT_PHRASE_WORDS = 20
+MIN_RELEVANT_WORDS_IN_EXACT_PHRASE = 14
 MAX_POST_SIMILARITY = 0.38
 MAX_TITLE_SIMILARITY = 0.82
 MAX_CONTEXT_ARTICLES = 2
@@ -1489,32 +1493,47 @@ def extrair_noticia(
 
     titulo = None
 
-    h1 = soup.find(
-        "h1"
-    )
-
-    if h1:
-
-        titulo = h1.get_text(
-            " ",
-            strip=True
-        )
-
-    if not titulo:
-
-        titulo_tag = soup.find(
-            "title"
-        )
-
-        if titulo_tag:
-
-            titulo = titulo_tag.get_text(
-                " ",
-                strip=True
+    # Muitos portais usam H2/H3 para o título da matéria e deixam
+    # o H1 reservado ao nome do site. Prioriza metadados editoriais.
+    for meta_attrs in (
+        {"property": "og:title"},
+        {"name": "twitter:title"},
+    ):
+        meta_titulo = soup.find("meta", attrs=meta_attrs)
+        if meta_titulo and meta_titulo.get("content"):
+            valor = meta_titulo.get("content").strip()
+            valor_normalizado = normalizar_texto(valor)
+            generico = (
+                "portal gospel play - o canal de noticias do cristao online" in valor_normalizado
+                or "portal gospel play - o canal de notícias do cristão online" in valor_normalizado
             )
+            if valor and not generico:
+                titulo = valor
+                break
 
     if not titulo:
+        h1 = soup.find("h1")
+        if h1:
+            valor = h1.get_text(" ", strip=True)
+            if valor:
+                titulo = valor
 
+    if not titulo:
+        for tag_name in ("h2", "h3"):
+            for tag in soup.find_all(tag_name):
+                valor = tag.get_text(" ", strip=True)
+                if len(valor) >= 20:
+                    titulo = valor
+                    break
+            if titulo:
+                break
+
+    if not titulo:
+        titulo_tag = soup.find("title")
+        if titulo_tag:
+            titulo = titulo_tag.get_text(" ", strip=True)
+
+    if not titulo:
         print(
             "Título não encontrado."
         )
@@ -1783,14 +1802,32 @@ def validar_materia_gerada(noticia, titulo, conteudo):
         print("REPROVADA: possível cópia/reformulação mecânica da fonte.")
         return False
 
-    # Frases longas idênticas são um sinal forte de cópia.
+    # Só bloqueia uma sequência realmente longa e contínua.
+    # Nomes próprios, títulos de músicas e pequenas combinações
+    # factuais podem aparecer naturalmente em uma matéria original.
+    # Por isso, além do comprimento, exigimos uma quantidade mínima
+    # de palavras relevantes dentro do trecho copiado.
     fonte = normalizar_texto(noticia.get("texto", ""))
     gerado = normalizar_texto(texto_limpo)
     palavras = fonte.split()
-    for i in range(max(0, len(palavras)-7)):
-        trecho = " ".join(palavras[i:i+8])
-        if len(trecho) >= 45 and trecho in gerado:
-            print("REPROVADA: frase longa idêntica encontrada na fonte.")
+    tamanho = MAX_EXACT_PHRASE_WORDS
+
+    if len(palavras) >= tamanho:
+        for i in range(len(palavras) - tamanho + 1):
+            trecho_palavras = palavras[i:i+tamanho]
+            trecho = " ".join(trecho_palavras)
+
+            if trecho not in gerado:
+                continue
+
+            relevantes = palavras_relevantes(" ".join(trecho_palavras))
+            if len(relevantes) < MIN_RELEVANT_WORDS_IN_EXACT_PHRASE:
+                continue
+
+            print(
+                "REPROVADA: sequência muito longa idêntica encontrada "
+                f"na fonte ({tamanho} palavras, {len(relevantes)} relevantes)."
+            )
             return False
 
     return True
@@ -1941,7 +1978,7 @@ REGRAS OBRIGATÓRIAS:
 3. Crie uma introdução própria; não comece repetindo a abertura da fonte.
 4. Reescreva a notícia integralmente com estrutura e ordem de informações próprias.
 5. NÃO faça tradução, substituição de sinônimos ou paráfrase frase a frase.
-6. Não copie frases longas da fonte.
+6. Não copie frases longas da fonte nem reproduza trechos de declarações literalmente; resuma as falas com redação própria.
 7. Preserve nomes, datas, números e fatos somente quando estiverem sustentados pelas fontes fornecidas.
 8. Não invente declarações, números, datas, locais, links, eventos ou informações biográficas.
 9. Use a fonte secundária apenas quando ela tratar claramente do mesmo assunto e acrescentar um fato verificável.
@@ -2200,12 +2237,10 @@ REGRAS:
             contents=prompt,
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
-                response_format={
-                    "image": {
-                        "aspect_ratio": "16:9",
-                        "image_size": "2K",
-                    }
-                },
+                image_config=types.ImageConfig(
+                    aspect_ratio="16:9",
+                    image_size="2K",
+                ),
             ),
         )
 
@@ -2245,8 +2280,6 @@ def publicar_imagem_no_github(caminho_imagem):
             ["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"],
             ["git", "add", str(caminho)],
         ]
-
-        import subprocess
 
         for comando in comandos:
             resultado = subprocess.run(
@@ -2486,7 +2519,7 @@ def main():
 
     print(
         "RÁDIO LUZ GOSPEL - "
-        "ROBÔ DE NOTÍCIAS 2.8"
+        "ROBÔ DE NOTÍCIAS 2.9"
     )
 
     print(
