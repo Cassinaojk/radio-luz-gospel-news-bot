@@ -17,7 +17,7 @@ from googleapiclient.discovery import build
 
 # ============================================================
 # RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS
-# VERSÃO 3.2 - EDITORIAL ADSENSE + IMAGEM ORIGINAL DA NOTÍCIA + FONTES ATUALIZADAS
+# VERSÃO 3.3 - EDITORIAL ADSENSE + IMAGEM ORIGINAL DA NOTÍCIA + FONTES ATUALIZADAS
 # ============================================================
 
 
@@ -35,16 +35,13 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 # Contador de chamadas Gemini nesta execução.
 gemini_text_calls_this_run = 0
-gemini_image_calls_this_run = 0
 
 # Limites de proteção contra excesso de uso do Gemini e publicações.
 MAX_GEMINI_TEXT_CALLS_PER_RUN = 1
-MAX_GEMINI_IMAGE_CALLS_PER_RUN = 1
 MAX_POSTS_PER_DAY = 3
 
 GITHUB_REPO = "Cassinaojk/radio-luz-gospel-news-bot"
 GITHUB_BRANCH = "main"
-GITHUB_IMAGE_DIR = "blog-images"
 
 # Identificação das publicações feitas pelo robô.
 BOT_LABEL = "Radio Luz Gospel Bot"
@@ -92,9 +89,6 @@ FONTES = [
     {
         "nome": "UAU Gospel",
         "url": "https://www.uaugospel.com.br/",
-    },
-    {
-        "nome": "Portal Gospel Play",
     },
     {
         "nome": "Gospel+",
@@ -754,32 +748,6 @@ def link_valido(
         }:
             return False
 
-    # --------------------------------------------------------
-    # PORTAL GOSPEL PLAY
-    # --------------------------------------------------------
-    if fonte["nome"] == "Portal Gospel Play":
-        if primeiro in {
-            "entrar", "login", "colunistas", "classificados",
-            "lojistas", "enquetes", "contato", "sobre",
-            "termos-de-uso", "politica-de-privacidade",
-        }:
-            return False
-        if primeiro != "noticia":
-            return False
-        if len(partes) < 2:
-            return False
-
-    # --------------------------------------------------------
-    # FUXICO
-    # --------------------------------------------------------
-
-    if (
-        fonte["nome"]
-        == "Fuxico Gospel"
-    ):
-
-        if len(partes) < 2:
-            return False
 
 
     return True
@@ -1533,8 +1501,6 @@ def extrair_noticia(
                 if len(candidato) >= 20:
                     candidatos_titulo.append(candidato)
         if candidatos_titulo:
-            # Para o Portal Gospel Play, o título da notícia costuma
-            # aparecer em H3; para os demais, o primeiro título útil.
             titulo = candidatos_titulo[0]
 
     if not titulo:
@@ -1546,28 +1512,6 @@ def extrair_noticia(
         print("Título não encontrado.")
         return None
 
-    # Descarta títulos claramente institucionais do Portal Gospel Play.
-    titulo_normalizado = normalizar_texto(titulo)
-    if (
-        fonte["nome"] == "Portal Gospel Play"
-        and (
-            "portal gospel play" in titulo_normalizado
-            and len(titulo_normalizado.split()) <= 12
-        )
-    ):
-        alternativas = []
-        for tag_name in ("h2", "h3", "h1"):
-            for tag in soup.find_all(tag_name):
-                candidato = tag.get_text(" ", strip=True)
-                cn = normalizar_texto(candidato)
-                if (
-                    len(candidato) >= 30
-                    and "portal gospel play" not in cn
-                    and "o canal de notícias" not in cn
-                ):
-                    alternativas.append(candidato)
-        if alternativas:
-            titulo = alternativas[0]
 
     # --------------------------------------------------------
     # IMAGEM
@@ -2234,189 +2178,6 @@ PESQUISA SECUNDÁRIA DISPONÍVEL:
 # PUBLICAR NO BLOGGER
 # ============================================================
 
-def slug_para_arquivo(texto):
-
-    texto = normalizar_texto(texto)
-    texto = re.sub(r"[^a-z0-9]+", "-", texto)
-    texto = texto.strip("-")
-
-    if not texto:
-        texto = "noticia"
-
-    return texto[:90]
-
-
-def gerar_imagem_editorial_fallback(titulo, conteudo):
-    """Cria uma arte editorial original localmente quando o modelo de imagem não tem cota.
-
-    A arte não utiliza fotografias, imagens externas, logos ou material da fonte.
-    Isso permite que a publicação continue sem reutilizar a imagem original da notícia.
-    """
-    try:
-
-        pasta = Path(GITHUB_IMAGE_DIR)
-        pasta.mkdir(parents=True, exist_ok=True)
-
-        largura, altura = 1600, 900
-        imagem = Image.new("RGB", (largura, altura), (18, 18, 28))
-        draw = ImageDraw.Draw(imagem)
-
-        # Fundo editorial abstrato e original.
-        for x in range(0, largura, 80):
-            intensidade = 28 + int(24 * x / largura)
-            draw.rectangle([x, 0, x + 80, altura], fill=(intensidade, 18, 36))
-
-        # Ondas sonoras decorativas.
-        centro_y = 270
-        for i in range(17):
-            x = 160 + i * 78
-            h = 35 + ((i * 37) % 150)
-            draw.rounded_rectangle(
-                [x, centro_y - h, x + 28, centro_y + h],
-                radius=14,
-                fill=(235, 190, 55),
-            )
-
-        # Microfone estilizado.
-        cx, cy = 1220, 300
-        draw.rounded_rectangle([cx - 80, cy - 150, cx + 80, cy + 100], radius=75, fill=(225, 225, 232))
-        draw.rectangle([cx - 18, cy + 80, cx + 18, cy + 230], fill=(225, 225, 232))
-        draw.arc([cx - 150, cy - 40, cx + 150, cy + 260], 0, 180, fill=(225, 225, 232), width=18)
-        draw.line([cx - 90, cy + 260, cx + 90, cy + 260], fill=(225, 225, 232), width=18)
-
-        # Caixa de manchete.
-        draw.rounded_rectangle([110, 470, 1490, 800], radius=34, fill=(12, 12, 20), outline=(235, 190, 55), width=4)
-
-        try:
-            fonte_titulo = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
-            fonte_sub = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
-        except Exception:
-            fonte_titulo = ImageFont.load_default()
-            fonte_sub = ImageFont.load_default()
-
-        # Quebra de título em linhas curtas.
-        palavras = str(titulo or "Notícia gospel").split()
-        linhas = []
-        linha = ""
-        for palavra in palavras:
-            teste = (linha + " " + palavra).strip()
-            if len(teste) <= 42:
-                linha = teste
-            else:
-                if linha:
-                    linhas.append(linha)
-                linha = palavra
-        if linha:
-            linhas.append(linha)
-        linhas = linhas[:4]
-
-        y = 515
-        for linha in linhas:
-            draw.text((155, y), linha, font=fonte_titulo, fill=(245, 245, 248))
-            y += 66
-
-        draw.text((155, 750), "ARTE EDITORIAL ORIGINAL", font=fonte_sub, fill=(235, 190, 55))
-
-        caminho = pasta / (slug_para_arquivo(titulo) + ".png")
-        imagem.save(caminho, "PNG", optimize=True)
-        print(f"Arte editorial original criada localmente: {caminho}")
-        return str(caminho)
-
-    except Exception as erro:
-        print(f"Erro ao criar arte editorial de fallback: {erro}")
-        return None
-
-
-def gerar_imagem_original(titulo, conteudo, url_imagem_original=None):
-    """Usa somente a imagem original encontrada na notícia."""
-    if not url_imagem_original:
-        print("⚠️ Notícia sem imagem original disponível.")
-        return None
-    try:
-        resposta = requests.get(url_imagem_original, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
-        resposta.raise_for_status()
-        content_type = resposta.headers.get("Content-Type", "").lower()
-        if not content_type.startswith("image/"):
-            print(f"⚠️ URL não retornou uma imagem: {url_imagem_original}")
-            return None
-        extensao = ".jpg"
-        if "png" in content_type: extensao = ".png"
-        elif "webp" in content_type: extensao = ".webp"
-        caminho = Path("imagem_original" + extensao)
-        caminho.write_bytes(resposta.content)
-        print(f"🖼️ Imagem original da notícia baixada: {url_imagem_original}")
-        return caminho
-    except Exception as e:
-        print(f"⚠️ Erro ao baixar imagem original: {e}")
-        return None
-
-def publicar_imagem_no_github(caminho_imagem):
-
-    print("Publicando imagem original no repositório GitHub...")
-
-    try:
-        caminho = Path(caminho_imagem)
-        if not caminho.exists():
-            print("Arquivo de imagem não encontrado.")
-            return None
-
-        comandos = [
-            ["git", "config", "user.name", "Radio Luz Gospel Bot"],
-            ["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"],
-            ["git", "add", str(caminho)],
-        ]
-
-        import subprocess
-
-        for comando in comandos:
-            resultado = subprocess.run(
-                comando,
-                capture_output=True,
-                text=True,
-            )
-            if resultado.returncode != 0:
-                print(f"Falha no Git: {resultado.stderr.strip()}")
-                return None
-
-        # Evita falha quando o arquivo já está no commit atual.
-        status = subprocess.run(
-            ["git", "diff", "--cached", "--quiet"],
-            capture_output=True,
-            text=True,
-        )
-
-        if status.returncode == 0:
-            print("Imagem já está versionada no GitHub.")
-        else:
-            commit = subprocess.run(
-                ["git", "commit", "-m", f"Adicionar imagem editorial: {caminho.stem}"],
-                capture_output=True,
-                text=True,
-            )
-            if commit.returncode != 0:
-                print(f"Falha ao criar commit: {commit.stderr.strip()}")
-                return None
-
-            push = subprocess.run(
-                ["git", "push", "origin", f"HEAD:{GITHUB_BRANCH}"],
-                capture_output=True,
-                text=True,
-            )
-            if push.returncode != 0:
-                print(f"Falha ao enviar imagem ao GitHub: {push.stderr.strip()}")
-                return None
-
-            print("Imagem enviada ao GitHub com sucesso.")
-
-        url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}/{caminho.as_posix()}"
-        print(f"URL pública da imagem: {url}")
-        return url
-
-    except Exception as erro:
-        print(f"Erro ao publicar imagem no GitHub: {erro}")
-        return None
-
-
 def publicar_no_blogger(
     service,
     titulo,
@@ -2802,32 +2563,16 @@ def main():
                 return
 
             # ------------------------------------------------
-            # IMAGEM EDITORIAL ORIGINAL
+            # IMAGEM ORIGINAL DA NOTÍCIA
             # ------------------------------------------------
 
-            caminho_imagem = gerar_imagem_original(
-                noticia,
-                titulo,
-                conteudo_gerado,
-            )
+            url_imagem = noticia.get("imagem")
 
-            if not caminho_imagem:
-                print(
-                    "Publicação cancelada: não foi possível gerar a imagem editorial original."
-                )
+            if url_imagem:
+                print("🖼️ Usando a imagem original da notícia.")
+            else:
+                print("⚠️ Notícia sem imagem original. Publicação cancelada.")
                 return
-
-            url_imagem = publicar_imagem_no_github(
-                caminho_imagem
-            )
-
-            if not url_imagem:
-                print(
-                    "Publicação cancelada: não foi possível hospedar a imagem no GitHub."
-                )
-                return
-
-            noticia["imagem"] = url_imagem
 
             # ------------------------------------------------
             # BLOGGER
