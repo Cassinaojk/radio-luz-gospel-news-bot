@@ -17,7 +17,7 @@ from googleapiclient.discovery import build
 
 # ============================================================
 # RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS
-# VERSÃO 3.0 - EDITORIAL ADSENSE + IMAGENS ORIGINAIS + VÍDEOS + RETRY GEMINI
+# VERSÃO 3.1 - EDITORIAL ADSENSE + IMAGENS ORIGINAIS + FALLBACK SEM COTA
 # ============================================================
 
 
@@ -2247,13 +2247,95 @@ def slug_para_arquivo(texto):
     return texto[:90]
 
 
+def gerar_imagem_editorial_fallback(titulo, conteudo):
+    """Cria uma arte editorial original localmente quando o modelo de imagem não tem cota.
+
+    A arte não utiliza fotografias, imagens externas, logos ou material da fonte.
+    Isso permite que a publicação continue sem reutilizar a imagem original da notícia.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+
+        pasta = Path(GITHUB_IMAGE_DIR)
+        pasta.mkdir(parents=True, exist_ok=True)
+
+        largura, altura = 1600, 900
+        imagem = Image.new("RGB", (largura, altura), (18, 18, 28))
+        draw = ImageDraw.Draw(imagem)
+
+        # Fundo editorial abstrato e original.
+        for x in range(0, largura, 80):
+            intensidade = 28 + int(24 * x / largura)
+            draw.rectangle([x, 0, x + 80, altura], fill=(intensidade, 18, 36))
+
+        # Ondas sonoras decorativas.
+        centro_y = 270
+        for i in range(17):
+            x = 160 + i * 78
+            h = 35 + ((i * 37) % 150)
+            draw.rounded_rectangle(
+                [x, centro_y - h, x + 28, centro_y + h],
+                radius=14,
+                fill=(235, 190, 55),
+            )
+
+        # Microfone estilizado.
+        cx, cy = 1220, 300
+        draw.rounded_rectangle([cx - 80, cy - 150, cx + 80, cy + 100], radius=75, fill=(225, 225, 232))
+        draw.rectangle([cx - 18, cy + 80, cx + 18, cy + 230], fill=(225, 225, 232))
+        draw.arc([cx - 150, cy - 40, cx + 150, cy + 260], 0, 180, fill=(225, 225, 232), width=18)
+        draw.line([cx - 90, cy + 260, cx + 90, cy + 260], fill=(225, 225, 232), width=18)
+
+        # Caixa de manchete.
+        draw.rounded_rectangle([110, 470, 1490, 800], radius=34, fill=(12, 12, 20), outline=(235, 190, 55), width=4)
+
+        try:
+            fonte_titulo = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
+            fonte_sub = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+        except Exception:
+            fonte_titulo = ImageFont.load_default()
+            fonte_sub = ImageFont.load_default()
+
+        # Quebra de título em linhas curtas.
+        palavras = str(titulo or "Notícia gospel").split()
+        linhas = []
+        linha = ""
+        for palavra in palavras:
+            teste = (linha + " " + palavra).strip()
+            if len(teste) <= 42:
+                linha = teste
+            else:
+                if linha:
+                    linhas.append(linha)
+                linha = palavra
+        if linha:
+            linhas.append(linha)
+        linhas = linhas[:4]
+
+        y = 515
+        for linha in linhas:
+            draw.text((155, y), linha, font=fonte_titulo, fill=(245, 245, 248))
+            y += 66
+
+        draw.text((155, 750), "ARTE EDITORIAL ORIGINAL", font=fonte_sub, fill=(235, 190, 55))
+
+        caminho = pasta / (slug_para_arquivo(titulo) + ".png")
+        imagem.save(caminho, "PNG", optimize=True)
+        print(f"Arte editorial original criada localmente: {caminho}")
+        return str(caminho)
+
+    except Exception as erro:
+        print(f"Erro ao criar arte editorial de fallback: {erro}")
+        return None
+
+
 def gerar_imagem_original(noticia, titulo, conteudo):
 
     global gemini_image_calls_this_run
 
     if gemini_image_calls_this_run >= MAX_GEMINI_IMAGE_CALLS_PER_RUN:
-        print("Limite de geração de imagem desta execução atingido.")
-        return None
+        print("Limite de geração de imagem desta execução atingido. Usando arte editorial local.")
+        return gerar_imagem_editorial_fallback(titulo, conteudo)
 
     gemini_image_calls_this_run += 1
 
@@ -2311,12 +2393,18 @@ REGRAS:
                 print(f"Imagem original gerada: {caminho}")
                 return str(caminho)
 
-        print("Gemini não retornou uma imagem.")
-        return None
+        print("Gemini não retornou uma imagem. Usando arte editorial local.")
+        return gerar_imagem_editorial_fallback(titulo, conteudo)
 
     except Exception as erro:
+        mensagem = str(erro)
         print(f"Erro ao gerar imagem original: {erro}")
-        return None
+
+        if "429" in mensagem or "RESOURCE_EXHAUSTED" in mensagem or "quota" in mensagem.lower():
+            print("Cota do modelo de imagem indisponível. Não haverá nova tentativa nesta execução.")
+            print("Usando arte editorial original local, sem copiar a imagem da fonte.")
+
+        return gerar_imagem_editorial_fallback(titulo, conteudo)
 
 
 def publicar_imagem_no_github(caminho_imagem):
