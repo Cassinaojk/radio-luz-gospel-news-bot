@@ -1,0 +1,55 @@
+name: Rádio Luz Gospel - Notícias
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub Actions usa UTC.
+    # 08:00, 14:00 e 20:00 em America/Sao_Paulo = 11:00, 17:00 e 23:00 UTC.
+    - cron: '0 11 * * *'
+    - cron: '0 17 * * *'
+    - cron: '0 23 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: radio-luz-gospel-news
+  cancel-in-progress: false
+
+jobs:
+  publicar-noticias:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Baixar código
+        uses: actions/checkout@v5
+
+      - name: Configurar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Executar robô de notícias
+        env:
+          BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          set -o pipefail
+          python -u bot/main.py 2>&1 | tee log_erro.txt
+
+      - name: Salvar log em caso de erro
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: log-noticias-${{ github.run_number }}
+          path: log_erro.txt
+          if-no-files-found: ignore
+          retention-days: 7
