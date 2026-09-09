@@ -919,7 +919,7 @@ def html(article, generated):
 
 
 def main():
-    print("News Gospel + UAU Gospel + Folha Gospel Música + Guiame Música | Versão 9.2")
+    print("News Gospel + UAU Gospel + Folha Gospel Música + Guiame Música | /musicas sem Fuxico | Versão 9.4")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls = existing(api)
@@ -941,8 +941,10 @@ def main():
                 continue
             article=get_article(normalized)
             if article:
-                if not is_music_article(article):
-                    continue
+                # Todas as matérias das fontes são elegíveis para publicação.
+                # A classificação em /musicas é feita exclusivamente pelos
+                # marcadores da fonte: Fuxico Gospel nunca entra em /musicas;
+                # News Gospel, UAU Gospel, Folha Gospel e Guiame entram.
                 candidate_urls.add(normalized)
                 candidates.append(article)
 
@@ -1543,5 +1545,5 @@ selfbot.MAX_AGE_DAYS=MAX_AGE_DAYS
 selfbot.MAX_POSTS_PER_DAY=3
 selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN=6
 
-print("VERSÃO 9.3 ATIVA: Fuxico Gospel + demais fontes | /musicas somente fontes não-Fuxico")
+print("VERSÃO 9.4 ATIVA: todas as fontes | /musicas somente News Gospel, UAU Gospel, Folha Gospel e Guiame")
 selfbot.main()
