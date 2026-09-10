@@ -1690,6 +1690,38 @@ def instagram_promote(post, source_name_text):
             print("⚠ Divulgação: Instagram não retornou o ID da publicação.")
             return False
 
+        # O Instagram pode precisar de alguns segundos para processar o container.
+        # Aguarda até ficar pronto antes de chamar /media_publish.
+        import time
+        ready = False
+        for attempt in range(1, 7):
+            time.sleep(5)
+            status = requests.get(
+                f"{base}/{creation_id}",
+                params={
+                    "fields": "status_code",
+                    "access_token": INSTAGRAM_ACCESS_TOKEN,
+                },
+                timeout=TIMEOUT,
+            )
+            if not status.ok:
+                print(f"⚠ Divulgação: Instagram status HTTP {status.status_code}: {status.text[:300]}")
+                return False
+
+            status_code = status.json().get("status_code", "")
+            if status_code == "FINISHED":
+                ready = True
+                break
+            if status_code in ("ERROR", "EXPIRED"):
+                print(f"⚠ Divulgação: container do Instagram ficou com status {status_code}.")
+                return False
+
+            print(f"   Instagram: aguardando processamento do container ({attempt}/6)...")
+
+        if not ready:
+            print("⚠ Divulgação: Instagram não deixou o container pronto a tempo.")
+            return False
+
         publish = requests.post(
             f"{base}/media_publish",
             data={
