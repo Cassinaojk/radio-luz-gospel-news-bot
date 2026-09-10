@@ -15,6 +15,15 @@ GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 BLOGGER_REFRESH_TOKEN = os.environ["BLOGGER_REFRESH_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
+# Divulgação para leitores reais (opcional).
+# Não gera visitas artificiais nem abre páginas automaticamente.
+PROMO_ENABLED = os.getenv("PROMO_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+PROMO_UTM_SOURCE = os.getenv("PROMO_UTM_SOURCE", "telegram").strip() or "telegram"
+PROMO_UTM_MEDIUM = os.getenv("PROMO_UTM_MEDIUM", "social").strip() or "social"
+PROMO_UTM_CAMPAIGN = os.getenv("PROMO_UTM_CAMPAIGN", "noticias").strip() or "noticias"
+
 # Limites
 MAX_POSTS_PER_RUN = 1
 MAX_GEMINI_TEXT_CALLS_PER_RUN = 6
@@ -1545,5 +1554,108 @@ selfbot.MAX_AGE_DAYS=MAX_AGE_DAYS
 selfbot.MAX_POSTS_PER_DAY=3
 selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN=6
 
-print("VERSÃO 9.4 ATIVA: todas as fontes | /musicas somente News Gospel, UAU Gospel, Folha Gospel e Guiame")
+# ============================================================
+# DIVULGAÇÃO 10.0 — leitores reais
+# ============================================================
+from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
+
+def promotion_url(post_url):
+    if not post_url:
+        return ""
+    try:
+        parts = urlsplit(post_url)
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query.update({
+            "utm_source": PROMO_UTM_SOURCE,
+            "utm_medium": PROMO_UTM_MEDIUM,
+            "utm_campaign": PROMO_UTM_CAMPAIGN,
+        })
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+    except Exception:
+        return post_url
+
+def telegram_promote(post, source_name_text):
+    if not PROMO_ENABLED:
+        print("Divulgação: desativada (PROMO_ENABLED=false)")
+        return False
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Divulgação: Telegram não configurado.")
+        return False
+    url = promotion_url(post.get("url", ""))
+    if not url:
+        return False
+    text = (
+        "📰 RÁDIO LUZ GOSPEL\n\n"
+        f"{post.get('title', '').strip()}\n\n"
+        "🎵 Confira a matéria completa:\n"
+        f"👉 {url}\n\n"
+        f"Fonte de apuração: {source_name_text}"
+    )
+    endpoint = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        r = requests.post(endpoint, json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": text[:3900],
+            "disable_web_page_preview": False,
+        }, timeout=TIMEOUT)
+        if r.status_code == 200:
+            print("✓ Divulgação: enviada ao Telegram para leitores inscritos")
+            return True
+        print(f"⚠ Divulgação: Telegram HTTP {r.status_code}")
+    except Exception as e:
+        print("⚠ Divulgação: erro no Telegram:", e)
+    return False
+
+# Mantém o robô original intacto e acrescenta uma etapa pós-publicação.
+_original_main = selfbot.main
+
+def main_with_real_reader_promotion():
+    if not PROMO_ENABLED:
+        _original_main()
+        return
+
+    api_before = blogger()
+    before_urls, _ = existing(api_before)
+
+    _original_main()
+
+    try:
+        api_after = blogger()
+        after_urls, _ = existing(api_after)
+        new_urls = list(after_urls - before_urls)
+        if not new_urls:
+            print("Divulgação: nenhuma publicação nova nesta execução.")
+            return
+
+        post_url = new_urls[0]
+        posts = api_after.posts().list(
+            blogId=BLOGGER_BLOG_ID,
+            maxResults=500,
+            fetchBodies=True
+        ).execute().get("items", [])
+
+        post = next(
+            (p for p in posts
+             if normalize_url(p.get("url", "")) == normalize_url(post_url)),
+            None
+        )
+        if not post:
+            print("Divulgação: publicação recém-criada não localizada.")
+            return
+
+        content = post.get("content", "") or ""
+        m = re.search(
+            r"RADIO_LUZ_GOSPEL_SOURCE_URL:\s*(https?://[^\s]+?)\s*-->",
+            content,
+            flags=re.I
+        )
+        source_text = source_name(m.group(1)) if m else "Rádio Luz Gospel"
+        telegram_promote(post, source_text)
+
+    except Exception as e:
+        print("⚠ Divulgação: erro na etapa pós-publicação:", e)
+
+selfbot.main = main_with_real_reader_promotion
+
+print("VERSÃO 10.0 ATIVA: notícias + divulgação opcional para leitores reais via Telegram")
 selfbot.main()
