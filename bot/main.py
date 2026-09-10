@@ -24,6 +24,15 @@ PROMO_UTM_SOURCE = os.getenv("PROMO_UTM_SOURCE", "telegram").strip() or "telegra
 PROMO_UTM_MEDIUM = os.getenv("PROMO_UTM_MEDIUM", "social").strip() or "social"
 PROMO_UTM_CAMPAIGN = os.getenv("PROMO_UTM_CAMPAIGN", "noticias").strip() or "noticias"
 
+# Divulgação opcional para Facebook e Instagram via Meta Graph API.
+FACEBOOK_ENABLED = os.getenv("FACEBOOK_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
+FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "").strip()
+FACEBOOK_PAGE_ACCESS_TOKEN = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
+INSTAGRAM_ENABLED = os.getenv("INSTAGRAM_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
+INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
+
 # Limites
 MAX_POSTS_PER_RUN = 1
 MAX_GEMINI_TEXT_CALLS_PER_RUN = 6
@@ -1601,6 +1610,103 @@ def promotion_url(post_url):
     except Exception:
         return post_url
 
+def social_image_url(post):
+    """Extrai a primeira imagem pública do HTML do post do Blogger."""
+    content = post.get("content", "") or ""
+    m = re.search(r"<img[^>]+src=[\"'](https?://[^\"']+)[\"']", content, flags=re.I)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def facebook_promote(post, source_name_text):
+    if not FACEBOOK_ENABLED:
+        return False
+    if not FACEBOOK_PAGE_ID or not FACEBOOK_PAGE_ACCESS_TOKEN:
+        print("⚠ Divulgação: Facebook não configurado.")
+        return False
+    url = promotion_url(post.get("url", ""))
+    if not url:
+        return False
+    text = (
+        "📰 RÁDIO LUZ GOSPEL\n\n"
+        f"{post.get('title', '').strip()}\n\n"
+        "🎵 Confira a matéria completa no site:\n"
+        f"👉 {url}\n\n"
+        f"Fonte de apuração: {source_name_text}"
+    )
+    endpoint = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/feed"
+    try:
+        r = requests.post(endpoint, data={
+            "message": text[:60000],
+            "link": url,
+            "access_token": FACEBOOK_PAGE_ACCESS_TOKEN,
+        }, timeout=TIMEOUT)
+        if r.ok:
+            print("✓ Divulgação: publicada no Facebook")
+            return True
+        print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
+    except Exception as e:
+        print("⚠ Divulgação: erro no Facebook:", e)
+    return False
+
+
+def instagram_promote(post, source_name_text):
+    if not INSTAGRAM_ENABLED:
+        return False
+    if not INSTAGRAM_USER_ID or not INSTAGRAM_ACCESS_TOKEN:
+        print("⚠ Divulgação: Instagram não configurado.")
+        return False
+    image_url = social_image_url(post)
+    url = promotion_url(post.get("url", ""))
+    if not image_url or not url:
+        print("⚠ Divulgação: Instagram sem imagem pública ou URL da matéria.")
+        return False
+    caption = (
+        "📰 RÁDIO LUZ GOSPEL\n\n"
+        f"{post.get('title', '').strip()}\n\n"
+        
+        "🔗 Leia a matéria completa:\n"
+        f"{url}\n\n"
+        f"Fonte de apuração: {source_name_text}\n\n"
+        "#RadioLuzGospel #Gospel #NoticiasGospel #MusicaGospel"
+    )
+    base = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}"
+    try:
+        create = requests.post(
+            f"{base}/media",
+            data={
+                "image_url": image_url,
+                "caption": caption[:2200],
+                "access_token": INSTAGRAM_ACCESS_TOKEN,
+            },
+            timeout=TIMEOUT,
+        )
+        if not create.ok:
+            print(f"⚠ Divulgação: Instagram criação HTTP {create.status_code}: {create.text[:300]}")
+            return False
+        creation_id = create.json().get("id")
+        if not creation_id:
+            print("⚠ Divulgação: Instagram não retornou o ID da publicação.")
+            return False
+
+        publish = requests.post(
+            f"{base}/media_publish",
+            data={
+                "creation_id": creation_id,
+                "access_token": INSTAGRAM_ACCESS_TOKEN,
+            },
+            timeout=TIMEOUT,
+        )
+        if publish.ok:
+            print("✓ Divulgação: publicada no Instagram")
+            return True
+        print(f"⚠ Divulgação: Instagram publicação HTTP {publish.status_code}: {publish.text[:300]}")
+    except Exception as e:
+        print("⚠ Divulgação: erro no Instagram:", e)
+    return False
+
+
 def telegram_promote(post, source_name_text):
     if not PROMO_ENABLED:
         print("Divulgação: desativada (PROMO_ENABLED=false)")
@@ -1678,6 +1784,8 @@ def main_with_real_reader_promotion():
         )
         source_text = source_name(m.group(1)) if m else "Rádio Luz Gospel"
         telegram_promote(post, source_text)
+        facebook_promote(post, source_text)
+        instagram_promote(post, source_text)
 
     except Exception as e:
         print("⚠ Divulgação: erro na etapa pós-publicação:", e)
