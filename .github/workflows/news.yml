@@ -36,6 +36,13 @@ jobs:
           PROMO_UTM_SOURCE: telegram
           PROMO_UTM_MEDIUM: social
           PROMO_UTM_CAMPAIGN: noticias
+          FACEBOOK_ENABLED: 'true'
+          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+          INSTAGRAM_ENABLED: 'true'
+          INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          META_GRAPH_API_VERSION: v24.0
         run: python -u bot/main.py
 
       - name: Salvar log em caso de erro
