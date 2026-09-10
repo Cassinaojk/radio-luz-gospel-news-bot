@@ -1671,7 +1671,7 @@ def instagram_promote(post, source_name_text):
         f"Fonte de apuração: {source_name_text}\n\n"
         "#RadioLuzGospel #Gospel #NoticiasGospel #MusicaGospel"
     )
-    base = f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}"
+    base = f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/me"
     try:
         create = requests.post(
             f"{base}/media",
