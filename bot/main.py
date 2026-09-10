@@ -914,6 +914,33 @@ def html(article, generated):
         "</a></small></p>"
     )
 
+    # Chamada para ação: convida leitores do Blogger a entrar
+    # voluntariamente no canal oficial do Telegram.
+    telegram_channel = os.getenv(
+        "TELEGRAM_CHANNEL_URL",
+        "https://t.me/radioluzgospelnoticias",
+    ).strip() or "https://t.me/radioluzgospelnoticias"
+
+    safe_telegram_channel = (
+        telegram_channel
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+    )
+
+    content.append(
+        '<div style="margin:24px 0;padding:18px;'
+        'border:1px solid #ddd;border-radius:12px;text-align:center;">'
+        '<p><strong>📲 Receba as próximas notícias no Telegram</strong></p>'
+        '<p>Entre no canal oficial da Rádio Luz Gospel e acompanhe '
+        'as novas notícias diretamente no Telegram.</p>'
+        f'<p><a href="{safe_telegram_channel}" target="_blank" '
+        'rel="noopener" style="display:inline-block;padding:10px 16px;'
+        'border-radius:8px;text-decoration:none;font-weight:bold;">'
+        '👉 ENTRAR NO CANAL DO TELEGRAM'
+        '</a></p>'
+        '</div>'
+    )
+
     for video_url in article["videos"]:
         content.append(
             '<p><iframe '
