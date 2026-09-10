@@ -13,7 +13,12 @@ BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 BLOGGER_REFRESH_TOKEN = os.environ["BLOGGER_REFRESH_TOKEN"]
+# O refresh token do Google é a credencial durável; o access token é renovado
+# automaticamente pela biblioteca Google quando necessário.
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+# A chave Gemini é intencionalmente lida do Secret e nunca gravada em disco.
+# Em setembro/2026 o Google exige migração para Auth Key; isso é uma troca única
+# do Secret no GitHub, não uma renovação periódica feita pelo robô.
 
 # Divulgação para leitores reais (opcional).
 # Não gera visitas artificiais nem abre páginas automaticamente.
@@ -1619,6 +1624,24 @@ def social_image_url(post):
     return ""
 
 
+def _meta_error_details(response):
+    """Extrai código/subcódigo/mensagem do erro Meta sem expor tokens."""
+    try:
+        data = response.json()
+    except Exception:
+        return None, None, response.text[:300]
+    err = data.get("error", {}) if isinstance(data, dict) else {}
+    return err.get("code"), err.get("error_subcode"), err.get("message", response.text[:300])
+
+
+def _print_meta_auth_error(channel, response):
+    code, subcode, message = _meta_error_details(response)
+    if str(code) == "190" or str(subcode) == "463":
+        print(f"⚠ Divulgação: token {channel} expirado/invalidado pela Meta. Atualize o Secret correspondente no GitHub; o robô não expõe nem grava o token.")
+    else:
+        print(f"⚠ Divulgação: {channel} HTTP {response.status_code}: {message[:300]}")
+
+
 def facebook_promote(post, source_name_text):
     if not FACEBOOK_ENABLED:
         return False
@@ -1645,7 +1668,7 @@ def facebook_promote(post, source_name_text):
         if r.ok:
             print("✓ Divulgação: publicada no Facebook")
             return True
-        print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
+        _print_meta_auth_error("Facebook", r)
     except Exception as e:
         print("⚠ Divulgação: erro no Facebook:", e)
     return False
@@ -1683,7 +1706,7 @@ def instagram_promote(post, source_name_text):
             timeout=TIMEOUT,
         )
         if not create.ok:
-            print(f"⚠ Divulgação: Instagram criação HTTP {create.status_code}: {create.text[:300]}")
+            _print_meta_auth_error("Instagram", create)
             return False
         creation_id = create.json().get("id")
         if not creation_id:
@@ -1697,7 +1720,7 @@ def instagram_promote(post, source_name_text):
         for attempt in range(1, 7):
             time.sleep(5)
             status = requests.get(
-                f"{base}/{creation_id}",
+                f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/{creation_id}",
                 params={
                     "fields": "status_code",
                     "access_token": INSTAGRAM_ACCESS_TOKEN,
@@ -1705,7 +1728,7 @@ def instagram_promote(post, source_name_text):
                 timeout=TIMEOUT,
             )
             if not status.ok:
-                print(f"⚠ Divulgação: Instagram status HTTP {status.status_code}: {status.text[:300]}")
+                _print_meta_auth_error("Instagram", status)
                 return False
 
             status_code = status.json().get("status_code", "")
@@ -1733,7 +1756,7 @@ def instagram_promote(post, source_name_text):
         if publish.ok:
             print("✓ Divulgação: publicada no Instagram")
             return True
-        print(f"⚠ Divulgação: Instagram publicação HTTP {publish.status_code}: {publish.text[:300]}")
+        _print_meta_auth_error("Instagram", publish)
     except Exception as e:
         print("⚠ Divulgação: erro no Instagram:", e)
     return False
@@ -1824,5 +1847,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 10.0 ATIVA: notícias + divulgação opcional para leitores reais via Telegram")
+print("VERSÃO 10.1 ATIVA: notícias + Telegram + Facebook + Instagram | autenticação corrigida")
 selfbot.main()
