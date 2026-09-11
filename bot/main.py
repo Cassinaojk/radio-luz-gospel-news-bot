@@ -1654,15 +1654,16 @@ def facebook_promote(post, source_name_text):
 def instagram_art_url(post):
     """Gera uma imagem JPEG pública com a foto original + faixa branca + título.
 
-    O Instagram Login aceita JPEG para publicação de imagem. Para manter o projeto
-    sem novas dependências, a composição é feita pelo QuickChart: primeiro cria
-    uma faixa branca com o título e depois a aplica sobre a foto original.
+    Usa o plugin de imagem de fundo e o plugin de anotação do QuickChart.
+    A faixa branca é uma única annotation do tipo "box" com "label" interno,
+    evitando o formato de annotation "label" separado que o QuickChart rejeita.
     """
     image_url = social_image_url(post)
     title = re.sub(r"\s+", " ", str(post.get("title", "")).strip())
     if not image_url or not title:
         return image_url
 
+    # Quebra o título em até 3 linhas.
     words = title.split()
     lines = []
     current = ""
@@ -1673,66 +1674,86 @@ def instagram_art_url(post):
             current = word
         else:
             current = candidate
-        if len(lines) == 2:
+        if len(lines) >= 2:
             break
     if current and len(lines) < 3:
         lines.append(current)
-    if len(lines) == 3 and len(" ".join(lines)) < len(title):
-        last = lines[2]
-        if len(last) > 30:
-            last = last[:27].rsplit(" ", 1)[0] + "..."
-        lines[2] = last
-    title_lines = lines or [title[:34]]
 
-    # Faixa branca de 1080x300 com o título em verde.
-    strip_config = {
+    # Se ainda houver título, compacta a terceira linha.
+    joined = " ".join(lines)
+    if len(joined) < len(title) and lines:
+        last = lines[-1]
+        if len(last) > 30:
+            lines[-1] = last[:27].rsplit(" ", 1)[0] + "..."
+        elif len(lines) < 3:
+            remaining = title[len(joined):].strip()
+            if remaining:
+                lines.append((remaining[:30].rsplit(" ", 1)[0] + "...") if len(remaining) > 30 else remaining)
+
+    title_lines = lines[:3] or [title[:34]]
+
+    config = {
         "type": "line",
         "data": {
             "labels": ["", ""],
             "datasets": [{
                 "data": [0, 0],
-                "borderColor": "rgba(255,255,255,0)",
-                "pointRadius": 0,
                 "borderWidth": 0,
-                "fill": False,
+                "pointRadius": 0,
+                "borderColor": "rgba(255,255,255,0)",
+                "backgroundColor": "rgba(255,255,255,0)",
             }],
         },
         "options": {
             "responsive": False,
             "animation": False,
             "legend": {"display": False},
+            "layout": {"padding": 0},
             "scales": {
-                "xAxes": [{"display": False}],
-                "yAxes": [{"display": False}],
+                "xAxes": [{
+                    "display": False,
+                    "ticks": {"min": 0, "max": 1},
+                    "gridLines": {"display": False},
+                }],
+                "yAxes": [{
+                    "display": False,
+                    "ticks": {"min": 0, "max": 1},
+                    "gridLines": {"display": False},
+                }],
             },
-            "title": {
-                "display": True,
-                "text": title_lines,
-                "fontColor": "#168A57",
-                "fontSize": 30,
-                "fontStyle": "bold",
-                "position": "top",
-                "padding": 20,
+            "plugins": {
+                "backgroundImageUrl": image_url,
+                "annotation": {
+                    "annotations": [{
+                        "type": "box",
+                        "xMin": 0,
+                        "xMax": 1,
+                        "yMin": 0,
+                        "yMax": 0.30,
+                        "backgroundColor": "#FFFFFF",
+                        "borderWidth": 0,
+                        "label": {
+                            "enabled": True,
+                            "content": title_lines,
+                            "position": "center",
+                            "backgroundColor": "rgba(255,255,255,0)",
+                            "fontColor": "#168A57",
+                            "fontSize": 30,
+                            "fontStyle": "bold",
+                            "padding": 10,
+                        },
+                    }],
+                },
             },
         },
     }
 
     from urllib.parse import quote
-    strip_json = json.dumps(strip_config, ensure_ascii=False, separators=(",", ":"))
-    strip_url = (
-        "https://quickchart.io/chart?width=1080&height=300"
-        "&devicePixelRatio=1&format=jpg&version=2.9.4"
-        "&backgroundColor=white&c=" + quote(strip_json, safe="")
-    )
-
-    # Combina a faixa com a foto. O resultado final também é JPEG.
+    encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")), safe="")
     return (
-        "https://quickchart.io/watermark?"
-        "mainImageUrl=" + quote(image_url, safe="")
-        + "&markImageUrl=" + quote(strip_url, safe="")
-        + "&imageWidth=1080&imageHeight=1080"
-        + "&markWidth=1080&markHeight=300"
-        + "&position=bottomMiddle&margin=0"
+        "https://quickchart.io/chart"
+        "?width=1080&height=1080&devicePixelRatio=1"
+        "&format=jpg&version=2.9.4&backgroundColor=white&c=" + encoded
     )
 
 
@@ -1921,5 +1942,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 10.4 ATIVA: Instagram com arte JPEG + título | Facebook + Telegram preservados")
+print("VERSÃO 10.5 ATIVA: Instagram com arte JPEG + título | Facebook + Telegram preservados")
 selfbot.main()
