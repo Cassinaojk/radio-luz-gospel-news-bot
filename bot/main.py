@@ -1652,28 +1652,91 @@ def facebook_promote(post, source_name_text):
 
 
 def instagram_art_url(post):
-    """Cria uma versão da imagem com parte do título sobreposta, sem alterar a imagem original."""
+    """Gera uma URL PNG pública com a foto original + faixa branca + título.
+
+    Usa o QuickChart para renderizar a imagem final no servidor, sem nova
+    dependência no requirements.txt e sem precisar hospedar arquivo local.
+    """
     image_url = social_image_url(post)
     title = re.sub(r"\s+", " ", str(post.get("title", "")).strip())
     if not image_url or not title:
         return image_url
 
-    # Mantém o título curto o suficiente para ficar legível na arte.
-    if len(title) > 120:
-        title = title[:117].rsplit(" ", 1)[0] + "..."
+    # Quebra o título em até 3 linhas para ficar legível no Instagram.
+    words = title.split()
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and len(candidate) > 34:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+        if len(lines) == 2:
+            break
+    if len(lines) < 3 and current:
+        lines.append(current)
+    if len(lines) > 3:
+        lines = lines[:3]
+    if len(lines) == 3 and len(" ".join(lines)) < len(title):
+        last = lines[2]
+        if len(last) > 30:
+            last = last[:27].rsplit(" ", 1)[0] + "..."
+        lines[2] = last
+    title_lines = lines or [title[:34]]
+
+    # Chart.js usa a foto como fundo e cria uma faixa branca na parte inferior.
+    # A saída é PNG, formato aceito pelo Instagram como image_url.
+    config = {
+        "type": "scatter",
+        "data": {"datasets": []},
+        "options": {
+            "animation": False,
+            "responsive": False,
+            "legend": {"display": False},
+            "scales": {
+                "xAxes": [{"display": False, "ticks": {"min": 0, "max": 1}}],
+                "yAxes": [{"display": False, "ticks": {"min": 0, "max": 1}}],
+            },
+            "plugins": {
+                "backgroundImageUrl": image_url,
+                "annotation": {
+                    "annotations": [
+                        {
+                            "type": "box",
+                            "xMin": 0,
+                            "xMax": 1,
+                            "yMin": 0,
+                            "yMax": 0.30,
+                            "backgroundColor": "#FFFFFF",
+                            "borderWidth": 0,
+                        },
+                        {
+                            "type": "label",
+                            "xValue": 0.5,
+                            "yValue": 0.15,
+                            "content": title_lines,
+                            "backgroundColor": "transparent",
+                            "fontColor": "#168A57",
+                            "fontSize": 30,
+                            "fontStyle": "bold",
+                            "textAlign": "center",
+                            "padding": 12,
+                        },
+                    ]
+                },
+            },
+        },
+    }
 
     from urllib.parse import quote
-    params = (
-        "image_url=" + quote(image_url, safe="")
-        + "&text=" + quote(title, safe="")
-        + "&overlay_color=FFFFFF"
-        + "&text_color=168A57"
-        + "&text_size=64"
-        + "&x_align=center"
-        + "&y_align=bottom"
-        + "&margin=40"
+    import json
+    encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")), safe="")
+    return (
+        "https://quickchart.io/chart?width=1080&height=1080"
+        "&devicePixelRatio=1&format=png&version=2.9.4&c=" + encoded
     )
-    return "https://textoverimage.moesif.com/image?" + params
 
 
 def instagram_promote(post, source_name_text):
@@ -1700,6 +1763,18 @@ def instagram_promote(post, source_name_text):
     # Esta é a autenticação do Instagram que já foi validada no robô.
     base = f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/me"
     try:
+        if image_url != original_image_url:
+            try:
+                check = requests.get(image_url, stream=True, timeout=25)
+                content_type = (check.headers.get("Content-Type") or "").lower()
+                check.close()
+                if check.status_code != 200 or not content_type.startswith("image/"):
+                    print(f"⚠ Divulgação: arte automática não retornou imagem ({check.status_code}, {content_type}); usando imagem original.")
+                    image_url = original_image_url
+            except Exception as art_error:
+                print(f"⚠ Divulgação: não foi possível validar a arte automática ({art_error}); usando imagem original.")
+                image_url = original_image_url
+
         create = requests.post(
             f"{base}/media",
             data={
@@ -1847,5 +1922,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 10.2 ATIVA: Instagram com arte automática + título | Facebook + Telegram preservados")
+print("VERSÃO 10.3 ATIVA: Instagram com arte PNG + título | Facebook + Telegram preservados")
 selfbot.main()
