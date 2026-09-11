@@ -1652,17 +1652,17 @@ def facebook_promote(post, source_name_text):
 
 
 def instagram_art_url(post):
-    """Gera uma URL PNG pública com a foto original + faixa branca + título.
+    """Gera uma imagem JPEG pública com a foto original + faixa branca + título.
 
-    Usa o QuickChart para renderizar a imagem final no servidor, sem nova
-    dependência no requirements.txt e sem precisar hospedar arquivo local.
+    O Instagram Login aceita JPEG para publicação de imagem. Para manter o projeto
+    sem novas dependências, a composição é feita pelo QuickChart: primeiro cria
+    uma faixa branca com o título e depois a aplica sobre a foto original.
     """
     image_url = social_image_url(post)
     title = re.sub(r"\s+", " ", str(post.get("title", "")).strip())
     if not image_url or not title:
         return image_url
 
-    # Quebra o título em até 3 linhas para ficar legível no Instagram.
     words = title.split()
     lines = []
     current = ""
@@ -1675,10 +1675,8 @@ def instagram_art_url(post):
             current = candidate
         if len(lines) == 2:
             break
-    if len(lines) < 3 and current:
+    if current and len(lines) < 3:
         lines.append(current)
-    if len(lines) > 3:
-        lines = lines[:3]
     if len(lines) == 3 and len(" ".join(lines)) < len(title):
         last = lines[2]
         if len(last) > 30:
@@ -1686,56 +1684,55 @@ def instagram_art_url(post):
         lines[2] = last
     title_lines = lines or [title[:34]]
 
-    # Chart.js usa a foto como fundo e cria uma faixa branca na parte inferior.
-    # A saída é PNG, formato aceito pelo Instagram como image_url.
-    config = {
-        "type": "scatter",
-        "data": {"datasets": []},
+    # Faixa branca de 1080x300 com o título em verde.
+    strip_config = {
+        "type": "line",
+        "data": {
+            "labels": ["", ""],
+            "datasets": [{
+                "data": [0, 0],
+                "borderColor": "rgba(255,255,255,0)",
+                "pointRadius": 0,
+                "borderWidth": 0,
+                "fill": False,
+            }],
+        },
         "options": {
-            "animation": False,
             "responsive": False,
+            "animation": False,
             "legend": {"display": False},
             "scales": {
-                "xAxes": [{"display": False, "ticks": {"min": 0, "max": 1}}],
-                "yAxes": [{"display": False, "ticks": {"min": 0, "max": 1}}],
+                "xAxes": [{"display": False}],
+                "yAxes": [{"display": False}],
             },
-            "plugins": {
-                "backgroundImageUrl": image_url,
-                "annotation": {
-                    "annotations": [
-                        {
-                            "type": "box",
-                            "xMin": 0,
-                            "xMax": 1,
-                            "yMin": 0,
-                            "yMax": 0.30,
-                            "backgroundColor": "#FFFFFF",
-                            "borderWidth": 0,
-                        },
-                        {
-                            "type": "label",
-                            "xValue": 0.5,
-                            "yValue": 0.15,
-                            "content": title_lines,
-                            "backgroundColor": "transparent",
-                            "fontColor": "#168A57",
-                            "fontSize": 30,
-                            "fontStyle": "bold",
-                            "textAlign": "center",
-                            "padding": 12,
-                        },
-                    ]
-                },
+            "title": {
+                "display": True,
+                "text": title_lines,
+                "fontColor": "#168A57",
+                "fontSize": 30,
+                "fontStyle": "bold",
+                "position": "top",
+                "padding": 20,
             },
         },
     }
 
     from urllib.parse import quote
-    import json
-    encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")), safe="")
+    strip_json = json.dumps(strip_config, ensure_ascii=False, separators=(",", ":"))
+    strip_url = (
+        "https://quickchart.io/chart?width=1080&height=300"
+        "&devicePixelRatio=1&format=jpg&version=2.9.4"
+        "&backgroundColor=white&c=" + quote(strip_json, safe="")
+    )
+
+    # Combina a faixa com a foto. O resultado final também é JPEG.
     return (
-        "https://quickchart.io/chart?width=1080&height=1080"
-        "&devicePixelRatio=1&format=png&version=2.9.4&c=" + encoded
+        "https://quickchart.io/watermark?"
+        "mainImageUrl=" + quote(image_url, safe="")
+        + "&markImageUrl=" + quote(strip_url, safe="")
+        + "&imageWidth=1080&imageHeight=1080"
+        + "&markWidth=1080&markHeight=300"
+        + "&position=bottomMiddle&margin=0"
     )
 
 
@@ -1796,10 +1793,12 @@ def instagram_promote(post, source_name_text):
         ready = False
         for attempt in range(1, 7):
             time.sleep(5)
+            # O container é consultado diretamente pelo ID. Não use /me/{id}:
+            # nessa rota o Instagram interpreta o ID como nome de campo.
             status = requests.get(
-                f"{base}/{creation_id}",
+                f"{base.rsplit('/me', 1)[0]}/{creation_id}",
                 params={
-                    "fields": "status_code",
+                    "fields": "status_code,status",
                     "access_token": INSTAGRAM_ACCESS_TOKEN,
                 },
                 timeout=TIMEOUT,
@@ -1922,5 +1921,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 10.3 ATIVA: Instagram com arte PNG + título | Facebook + Telegram preservados")
+print("VERSÃO 10.4 ATIVA: Instagram com arte JPEG + título | Facebook + Telegram preservados")
 selfbot.main()
