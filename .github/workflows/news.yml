@@ -23,6 +23,9 @@ jobs:
       - name: Instalar dependências
         run: pip install -r requirements.txt
 
+      - name: Ajustar arte do Instagram
+        run: python bot/instagram_patch.py
+
       - name: Executar robô de notícias
         env:
           BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
