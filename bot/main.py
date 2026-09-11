@@ -1652,18 +1652,13 @@ def facebook_promote(post, source_name_text):
 
 
 def instagram_art_url(post):
-    """Gera uma imagem JPEG pública com a foto original + faixa branca + título.
-
-    Usa o plugin de imagem de fundo e o plugin de anotação do QuickChart.
-    A faixa branca é uma única annotation do tipo "box" com "label" interno,
-    evitando o formato de annotation "label" separado que o QuickChart rejeita.
-    """
+    """Gera uma imagem JPEG pública com a foto original + faixa branca + título."""
     image_url = social_image_url(post)
     title = re.sub(r"\s+", " ", str(post.get("title", "")).strip())
     if not image_url or not title:
         return image_url
 
-    # Quebra o título em até 3 linhas.
+    # Até 3 linhas, mantendo o título legível.
     words = title.split()
     lines = []
     current = ""
@@ -1674,39 +1669,31 @@ def instagram_art_url(post):
             current = word
         else:
             current = candidate
-        if len(lines) >= 2:
-            break
-    if current and len(lines) < 3:
+    if current:
         lines.append(current)
 
-    # Se ainda houver título, compacta a terceira linha.
-    joined = " ".join(lines)
-    if len(joined) < len(title) and lines:
-        last = lines[-1]
-        if len(last) > 30:
-            lines[-1] = last[:27].rsplit(" ", 1)[0] + "..."
-        elif len(lines) < 3:
-            remaining = title[len(joined):].strip()
-            if remaining:
-                lines.append((remaining[:30].rsplit(" ", 1)[0] + "...") if len(remaining) > 30 else remaining)
+    if len(lines) > 3:
+        lines = lines[:3]
+        if not lines[-1].endswith("..."):
+            lines[-1] = lines[-1][:30].rstrip() + "..."
+    title_lines = lines or [title[:34]]
 
-    title_lines = lines[:3] or [title[:34]]
-
+    # Não usa annotation: algumas combinações do plugin/Chart.js retornam 400.
+    # A faixa branca é um gráfico de barras horizontal no terço inferior.
     config = {
-        "type": "line",
+        "type": "horizontalBar",
         "data": {
-            "labels": ["", ""],
+            "labels": ["", "", ""],
             "datasets": [{
-                "data": [0, 0],
+                "data": [0, 0, 1],
+                "backgroundColor": "#FFFFFF",
                 "borderWidth": 0,
-                "pointRadius": 0,
-                "borderColor": "rgba(255,255,255,0)",
-                "backgroundColor": "rgba(255,255,255,0)",
             }],
         },
         "options": {
             "responsive": False,
             "animation": False,
+            "maintainAspectRatio": False,
             "legend": {"display": False},
             "layout": {"padding": 0},
             "scales": {
@@ -1717,46 +1704,52 @@ def instagram_art_url(post):
                 }],
                 "yAxes": [{
                     "display": False,
-                    "ticks": {"min": 0, "max": 1},
+                    "barPercentage": 1.0,
+                    "categoryPercentage": 1.0,
                     "gridLines": {"display": False},
                 }],
             },
             "plugins": {
                 "backgroundImageUrl": image_url,
-            },
-            "annotation": {
-                "annotations": [{
-                    "type": "box",
-                    "xScaleID": "x-axis-0",
-                    "yScaleID": "y-axis-0",
-                    "xMin": 0,
-                    "xMax": 1,
-                    "yMin": 0,
-                    "yMax": 0.30,
-                    "backgroundColor": "#FFFFFF",
-                    "borderWidth": 0,
-                    "label": {
-                        "enabled": True,
-                        "content": "\n".join(title_lines),
-                        "position": "center",
-                        "backgroundColor": "rgba(255,255,255,0)",
-                        "fontColor": "#168A57",
-                        "fontSize": 30,
-                        "fontStyle": "bold",
-                        "padding": 10,
+                "datalabels": {
+                    "display": True,
+                    "color": "#168A57",
+                    "font": {
+                        "size": 30,
+                        "weight": "bold",
                     },
-                }],
+                    # Marcador temporário: abaixo ele é substituído por uma função JS real.
+                    "formatter": "__INSTAGRAM_TITULO_FORMATTER__",
+                    "anchor": "center",
+                    "align": "center",
+                    "backgroundColor": "rgba(255,255,255,0)",
+                    "padding": 0,
+                    "clamp": True,
+                },
             },
         },
     }
 
+    # QuickChart aceita JavaScript no parâmetro c; JSON não consegue transportar
+    # a função formatter. Convertemos a função para uma expressão JS segura.
+    config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+    fn = (
+        "function(value, context) { "
+        "return context.dataIndex === 2 ? "
+        + json.dumps("\n".join(title_lines), ensure_ascii=False)
+        + " : \"\"; }"
+    )
+    marker_json = json.dumps("__INSTAGRAM_TITULO_FORMATTER__", ensure_ascii=False)
+    config_json = config_json.replace(marker_json, fn, 1)
+
     from urllib.parse import quote
-    encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")), safe="")
+    encoded = quote(config_json, safe="")
     return (
         "https://quickchart.io/chart"
         "?width=1080&height=1080&devicePixelRatio=1"
         "&format=jpg&version=2.9.4&backgroundColor=white&c=" + encoded
     )
+
 
 
 def instagram_promote(post, source_name_text):
