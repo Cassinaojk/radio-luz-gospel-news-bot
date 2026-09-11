@@ -1723,27 +1723,29 @@ def instagram_art_url(post):
             },
             "plugins": {
                 "backgroundImageUrl": image_url,
-                "annotation": {
-                    "annotations": [{
-                        "type": "box",
-                        "xMin": 0,
-                        "xMax": 1,
-                        "yMin": 0,
-                        "yMax": 0.30,
-                        "backgroundColor": "#FFFFFF",
-                        "borderWidth": 0,
-                        "label": {
-                            "enabled": True,
-                            "content": title_lines,
-                            "position": "center",
-                            "backgroundColor": "rgba(255,255,255,0)",
-                            "fontColor": "#168A57",
-                            "fontSize": 30,
-                            "fontStyle": "bold",
-                            "padding": 10,
-                        },
-                    }],
-                },
+            },
+            "annotation": {
+                "annotations": [{
+                    "type": "box",
+                    "xScaleID": "x-axis-0",
+                    "yScaleID": "y-axis-0",
+                    "xMin": 0,
+                    "xMax": 1,
+                    "yMin": 0,
+                    "yMax": 0.30,
+                    "backgroundColor": "#FFFFFF",
+                    "borderWidth": 0,
+                    "label": {
+                        "enabled": True,
+                        "content": "\n".join(title_lines),
+                        "position": "center",
+                        "backgroundColor": "rgba(255,255,255,0)",
+                        "fontColor": "#168A57",
+                        "fontSize": 30,
+                        "fontStyle": "bold",
+                        "padding": 10,
+                    },
+                }],
             },
         },
     }
@@ -1780,8 +1782,9 @@ def instagram_promote(post, source_name_text):
 
     # Esta é a autenticação do Instagram que já foi validada no robô.
     base = f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/me"
+    used_art = image_url != original_image_url
     try:
-        if image_url != original_image_url:
+        if used_art:
             try:
                 check = requests.get(image_url, stream=True, timeout=25)
                 content_type = (check.headers.get("Content-Type") or "").lower()
@@ -1789,9 +1792,11 @@ def instagram_promote(post, source_name_text):
                 if check.status_code != 200 or not content_type.startswith("image/"):
                     print(f"⚠ Divulgação: arte automática não retornou imagem ({check.status_code}, {content_type}); usando imagem original.")
                     image_url = original_image_url
+                    used_art = False
             except Exception as art_error:
                 print(f"⚠ Divulgação: não foi possível validar a arte automática ({art_error}); usando imagem original.")
                 image_url = original_image_url
+                used_art = False
 
         create = requests.post(
             f"{base}/media",
@@ -1849,7 +1854,7 @@ def instagram_promote(post, source_name_text):
             timeout=TIMEOUT,
         )
         if publish.ok:
-            print("✓ Divulgação: publicada no Instagram com arte + título")
+            print("✓ Divulgação: publicada no Instagram com arte + título" if used_art else "✓ Divulgação: publicada no Instagram com imagem original (arte indisponível)")
             return True
         print(f"⚠ Divulgação: Instagram publicação HTTP {publish.status_code}: {publish.text[:300]}")
     except Exception as e:
@@ -1942,5 +1947,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 10.5 ATIVA: Instagram com arte JPEG + título | Facebook + Telegram preservados")
+print("VERSÃO 10.6 ATIVA: Instagram com arte JPEG + título | Facebook + Telegram preservados")
 selfbot.main()
