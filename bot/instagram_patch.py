@@ -9,7 +9,7 @@ start = s.index("def instagram_art_url(post):")
 end = s.index("\ndef instagram_promote", start)
 
 fn = r'''def instagram_art_url(post):
-    """Gera a arte 1080x1080 com a foto original e uma faixa discreta no rodapé."""
+    """Gera a arte 1080x1080 com foto original e faixa discreta no rodapé."""
     image_url = social_image_url(post)
     title = re.sub(r"\s+", " ", (post.get("title") or "").strip())
     if not image_url or not title:
@@ -32,12 +32,18 @@ fn = r'''def instagram_art_url(post):
         lines[-1] = lines[-1][:33].rstrip() + "..."
     title_lines = lines or [title[:36]]
 
+    # Alguns sites bloqueiam o servidor do QuickChart ao tentar buscar a foto.
+    # O proxy público redimensiona a imagem e entrega um JPEG simples para o
+    # QuickChart, mantendo a foto original como base da arte.
+    from urllib.parse import quote
+    proxied_image = (
+        "https://wsrv.nl/?url=" + quote(image_url, safe="")
+        + "&w=1080&h=1080&fit=cover&output=jpg&q=88"
+    )
+
     config = {
-        "type": "bar",
-        "data": {
-            "labels": [""],
-            "datasets": [{"data": [0], "backgroundColor": "rgba(0,0,0,0)"}],
-        },
+        "type": "scatter",
+        "data": {"datasets": [{"data": [], "pointRadius": 0}]},
         "options": {
             "responsive": False,
             "animation": False,
@@ -45,16 +51,8 @@ fn = r'''def instagram_art_url(post):
             "legend": {"display": False},
             "layout": {"padding": 0},
             "scales": {
-                "xAxes": [{
-                    "display": False,
-                    "ticks": {"min": 0, "max": 100},
-                    "gridLines": {"display": False},
-                }],
-                "yAxes": [{
-                    "display": False,
-                    "ticks": {"min": 0, "max": 100},
-                    "gridLines": {"display": False},
-                }],
+                "xAxes": [{"display": False, "ticks": {"min": 0, "max": 100}, "gridLines": {"display": False}}],
+                "yAxes": [{"display": False, "ticks": {"min": 0, "max": 100}, "gridLines": {"display": False}}],
             },
             "annotation": {
                 "annotations": [{
@@ -68,7 +66,7 @@ fn = r'''def instagram_art_url(post):
                     "yMax": 31,
                     "backgroundColor": "rgba(255,255,255,0.90)",
                     "borderColor": "rgba(22,138,87,0.95)",
-                    "borderWidth": 3,
+                    "borderWidth": 2,
                     "label": {
                         "enabled": True,
                         "content": title_lines,
@@ -82,12 +80,11 @@ fn = r'''def instagram_art_url(post):
                 }],
             },
             "plugins": {
-                "backgroundImageUrl": image_url,
+                "backgroundImageUrl": proxied_image,
             },
         },
     }
 
-    from urllib.parse import quote
     config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
     return (
         "https://quickchart.io/chart"
