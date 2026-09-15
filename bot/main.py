@@ -8,7 +8,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 9.3")
-print("VERSÃO 12.0 ATIVA: Instagram força arte | faixa preta semitransparente + primeira frase amarela + restante branco")
+print("VERSÃO 12.1 ATIVA: Instagram com texto amarelo/branco sobre imagem original (sem faixa)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -1745,8 +1745,14 @@ def _quickchart_band(height=360):
 def instagram_art_url(post):
     """Gera obrigatoriamente a arte final do Instagram.
 
-    Visual obrigatório: faixa preta semitransparente inferior; primeira frase
-    amarela; restante branco; texto em negrito; no máximo quatro linhas.
+    Visual obrigatório (versão 12.1):
+    - Imagem original (sem faixa de fundo)
+    - Texto sobreposto diretamente na imagem
+    - Pequeno resumo do título
+    - Primeira frase em amarelo
+    - Restante em branco
+    - Texto em negrito
+    - Máximo de 4 linhas
     """
     from urllib.parse import quote
     image_url = social_image_url(post)
@@ -1756,8 +1762,8 @@ def instagram_art_url(post):
         return None
 
     first_lines, remaining_lines = _instagram_text_parts(text, max_lines=4)
-    # A faixa é aplicada primeiro; depois o texto é aplicado por cima dela.
-    overlay_urls = [_quickchart_band()]
+    # Sem faixa: apenas o texto (amarelo + branco) sobre a imagem original.
+    overlay_urls = []
     if remaining_lines:
         overlay_urls.append(_quickchart_overlay(remaining_lines, "#FFFFFF"))
     if first_lines:
@@ -1959,5 +1965,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 10.6 ATIVA: Instagram com arte JPEG + título | Facebook + Telegram preservados")
+print("VERSÃO 12.1 ATIVA: Instagram texto amarelo/branco sobre imagem original (sem faixa) | Facebook + Telegram preservados")
 selfbot.main()
