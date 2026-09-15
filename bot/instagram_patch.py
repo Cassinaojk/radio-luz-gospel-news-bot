@@ -9,83 +9,118 @@ end = s.index("\ndef instagram_promote", start)
 fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.5
-    Visual fiel ao 12.1:
-    - Imagem original (sem faixa preta)
-    - Primeira linha amarela (#FFB51B)
-    - Restante em branco
-    - Texto em negrito
+    Instagram 12.6 — versão estável
+    - 1 único request (sem nesting)
+    - Imagem original de fundo
+    - Faixa escura semi-transparente embaixo
+    - Texto branco em negrito
     - Máximo 4 linhas
-    - Mínimo de requests (2 overlays + 1 watermark)
     """
     from urllib.parse import quote
+    import json
 
     image_url = social_image_url(post)
 
-    text = re.sub(
+    title = re.sub(
         r"\s+",
         " ",
         (
-            post.get("resumo")
+            post.get("title")
+            or post.get("resumo")
             or post.get("summary")
-            or post.get("title")
             or ""
         ).strip()
     )
 
-    if not image_url or not text:
+    if not image_url or not title:
         print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
         return None
 
-    first_lines, remaining_lines = _instagram_text_parts(text, max_lines=4)
+    # Quebra inteligente do título
+    words = title.split()
+    first = " ".join(words[:5])
+    rest = " ".join(words[5:])
 
-    # Garante no máximo 4 linhas no total
-    total_lines = (first_lines or []) + (remaining_lines or [])
-    if len(total_lines) > 4:
-        remaining_lines = remaining_lines[: max(0, 4 - len(first_lines or []))]
+    lines = [first]
+    if rest:
+        extra = _instagram_wrap_text(rest, max_chars=28, max_lines=3)
+        lines.extend(extra)
 
-    overlay_urls = []
+    lines = lines[:4]  # máximo 4 linhas
 
-    # Camada branca (restante)
-    if remaining_lines:
-        overlay_urls.append(
-            _quickchart_overlay(remaining_lines, "#FFFFFF", height=380)
-        )
+    text_js = json.dumps(lines, ensure_ascii=False)
+    image_js = json.dumps(image_url, ensure_ascii=False)
 
-    # Camada amarela (primeira linha) — fica por cima
-    if first_lines:
-        overlay_urls.append(
-            _quickchart_overlay(first_lines, "#FFB51B", height=380)
-        )
+    # Chart com imagem de fundo + faixa escura + texto branco
+    config = {
+        "type": "bar",
+        "data": {
+            "labels": [""],
+            "datasets": [{
+                "data": [100],
+                "backgroundColor": "rgba(0,0,0,0.55)",
+                "borderWidth": 0
+            }]
+        },
+        "options": {
+            "responsive": False,
+            "animation": False,
+            "maintainAspectRatio": False,
+            "legend": {"display": False},
+            "layout": {
+                "padding": {
+                    "top": 720,      # empurra a faixa para baixo
+                    "right": 40,
+                    "bottom": 40,
+                    "left": 40
+                }
+            },
+            "scales": {
+                "xAxes": [{"display": False, "stacked": True}],
+                "yAxes": [{
+                    "display": False,
+                    "stacked": True,
+                    "ticks": {"min": 0, "max": 100}
+                }]
+            },
+            "plugins": {
+                "backgroundImageUrl": image_url
+            },
+            "title": {
+                "display": True,
+                "position": "bottom",
+                "text": lines,
+                "fontSize": 34,
+                "fontStyle": "bold",
+                "fontColor": "#FFFFFF",
+                "padding": 28
+            }
+        }
+    }
 
-    if not overlay_urls:
-        return image_url
+    config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
 
-    # Compõe as camadas sobre a imagem original (posição inferior)
-    result = image_url
-    for overlay_url in overlay_urls:
-        result = (
-            "https://quickchart.io/watermark"
-            "?mainImageUrl=" + quote(result, safe="")
-            + "&markImageUrl=" + quote(overlay_url, safe="")
-            + "&markRatio=1"
-            + "&position=bottomMiddle"
-            + "&margin=0"
-        )
-
-    return result
+    return (
+        "https://quickchart.io/chart"
+        "?width=1080"
+        "&height=1080"
+        "&devicePixelRatio=1"
+        "&format=png"
+        "&version=2.9.4"
+        "&backgroundColor=transparent"
+        "&c=" + quote(config_json)
+    )
 '''
 
 s = s[:start] + fn + s[end:]
 
-# Atualiza as strings de versão
-s = s.replace("VERSÃO 12.3", "VERSÃO 12.5")
-s = s.replace("VERSÃO 12.4", "VERSÃO 12.5")
-s = s.replace("VERSÃO 12.2", "VERSÃO 12.5")
-s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.5 ATIVA")
-s = s.replace("Instagram 12.3", "Instagram 12.5")
-s = s.replace("Instagram 12.4", "Instagram 12.5")
+# Atualiza todas as referências de versão
+for old in ["12.5", "12.4", "12.3", "12.2", "12.1"]:
+    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.6")
+    s = s.replace(f"Instagram {old}", "Instagram 12.6")
+
+s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.6 ATIVA")
 
 p.write_text(s, encoding="utf-8")
 
-print("Patch Instagram 12.5 aplicado com sucesso.")
+print("Patch Instagram 12.6 aplicado com sucesso.")
