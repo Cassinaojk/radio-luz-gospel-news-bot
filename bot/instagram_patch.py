@@ -9,11 +9,10 @@ end = s.index("\ndef instagram_promote", start)
 fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.8
-    - Imagem original de fundo
-    - Faixa escura limpa embaixo
-    - Texto branco em negrito
-    - Logo Rádio Luz Gospel pequena no canto superior esquerdo (marca d'água)
+    Instagram 12.9
+    - Imagem original de fundo (sem faixa preta)
+    - Texto todo em amarelo queimado (#E8A317) e nítido
+    - Logo pequena no canto superior direito (não corta)
     """
     from urllib.parse import quote
     import json
@@ -50,17 +49,15 @@ def instagram_art_url(post):
     text_js = json.dumps(lines, ensure_ascii=False)
     image_js = json.dumps(image_url, ensure_ascii=False)
 
-    # 1) Gera a arte principal (imagem + faixa + texto)
+    # Arte principal: só a imagem + texto amarelo queimado (sem faixa)
     config = f"""{{
       type: 'bar',
       data: {{
         labels: [''],
         datasets: [{{
-          data: [100],
-          backgroundColor: 'rgba(0,0,0,0.62)',
-          borderWidth: 0,
-          barPercentage: 1.0,
-          categoryPercentage: 1.0
+          data: [0],
+          backgroundColor: 'rgba(0,0,0,0)',
+          borderWidth: 0
         }}]
       }},
       options: {{
@@ -70,25 +67,15 @@ def instagram_art_url(post):
         legend: {{ display: false }},
         layout: {{
           padding: {{
-            top: 680,
-            right: 0,
-            bottom: 0,
-            left: 0
+            top: 0,
+            right: 40,
+            bottom: 50,
+            left: 40
           }}
         }},
         scales: {{
-          xAxes: [{{
-            display: false,
-            stacked: true,
-            gridLines: {{ display: false }},
-            ticks: {{ display: false }}
-          }}],
-          yAxes: [{{
-            display: false,
-            stacked: true,
-            gridLines: {{ display: false }},
-            ticks: {{ min: 0, max: 100, display: false }}
-          }}]
+          xAxes: [{{ display: false }}],
+          yAxes: [{{ display: false }}]
         }},
         plugins: {{
           backgroundImageUrl: {image_js}
@@ -97,10 +84,10 @@ def instagram_art_url(post):
           display: true,
           position: 'bottom',
           text: {text_js},
-          fontSize: 32,
+          fontSize: 34,
           fontStyle: 'bold',
-          fontColor: '#FFFFFF',
-          padding: 36
+          fontColor: '#E8A317',
+          padding: 28
         }}
       }}
     }}"""
@@ -116,17 +103,17 @@ def instagram_art_url(post):
         "&c=" + quote(config)
     )
 
-    # 2) Adiciona a logo pequena no canto superior esquerdo
+    # Logo no canto superior direito (com margem para não cortar)
     logo_url = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjOn_KbSB2d3wtQA7oX6Q5S3Qg00w8xBGAdbaBvw-iTtZfPXykSXpDVZAO7xqGnWDT_ZVoVkMAoQEdkksEsG8whpKtu8m6axc3GTkcFALoq787DiXvDLbaoYsOrqgML7euwDQnYwchQA9_4D2eZbXkvU5Rf5rxFKo_xgKDMNHTQfYpGZLqXJ806YWHgtWjq/s320/radio%20luz%20gospel.png"
 
     final_url = (
         "https://quickchart.io/watermark"
         "?mainImageUrl=" + quote(art_url, safe="")
         + "&markImageUrl=" + quote(logo_url, safe="")
-        + "&markRatio=0.18"          # tamanho pequeno
-        + "&position=topLeft"
-        + "&margin=28"               # afastamento das bordas
-        + "&opacity=0.92"
+        + "&markRatio=0.17"
+        + "&position=topRight"
+        + "&margin=36"
+        + "&opacity=0.95"
     )
 
     return final_url
@@ -135,12 +122,12 @@ def instagram_art_url(post):
 s = s[:start] + fn + s[end:]
 
 # Atualiza versões
-for old in ["12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
-    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.8")
-    s = s.replace(f"Instagram {old}", "Instagram 12.8")
+for old in ["12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
+    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.9")
+    s = s.replace(f"Instagram {old}", "Instagram 12.9")
 
-s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.8 ATIVA")
+s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.9 ATIVA")
 
 p.write_text(s, encoding="utf-8")
 
-print("Patch Instagram 12.8 aplicado com sucesso.")
+print("Patch Instagram 12.9 aplicado com sucesso.")
