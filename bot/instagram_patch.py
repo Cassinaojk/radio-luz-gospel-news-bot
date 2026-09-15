@@ -9,14 +9,14 @@ end = s.index("\ndef instagram_promote", start)
 fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.11 — versão limpa
-    - Imagem original de fundo
+    Instagram 12.12 — versão estável
+    - Imagem original
     - Sem faixa preta
     - Sem marca d'água / logo
-    - Texto todo em amarelo queimado (#E8A317)
+    - Texto em amarelo queimado (#E8A317)
+    - Usa overlay + 1 watermark (muito mais estável)
     """
     from urllib.parse import quote
-    import json
 
     image_url = social_image_url(post)
 
@@ -35,7 +35,7 @@ def instagram_art_url(post):
         print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
         return None
 
-    # Quebra inteligente do título
+    # Quebra o título
     words = title.split()
     first = " ".join(words[:5])
     rest = " ".join(words[5:])
@@ -47,72 +47,36 @@ def instagram_art_url(post):
 
     lines = lines[:4]
 
-    text_js = json.dumps(lines, ensure_ascii=False)
-    image_js = json.dumps(image_url, ensure_ascii=False)
-
-    config = f"""{{
-      type: 'bar',
-      data: {{
-        labels: [''],
-        datasets: [{{
-          data: [0],
-          backgroundColor: 'rgba(0,0,0,0)',
-          borderWidth: 0
-        }}]
-      }},
-      options: {{
-        responsive: false,
-        animation: false,
-        maintainAspectRatio: false,
-        legend: {{ display: false }},
-        layout: {{
-          padding: {{
-            top: 0,
-            right: 50,
-            bottom: 55,
-            left: 50
-          }}
-        }},
-        scales: {{
-          xAxes: [{{ display: false }}],
-          yAxes: [{{ display: false }}]
-        }},
-        plugins: {{
-          backgroundImageUrl: {image_js}
-        }},
-        title: {{
-          display: true,
-          position: 'bottom',
-          text: {text_js},
-          fontSize: 36,
-          fontStyle: 'bold',
-          fontColor: '#E8A317',
-          padding: 32
-        }}
-      }}
-    }}"""
-
-    return (
-        "https://quickchart.io/chart"
-        "?width=1080"
-        "&height=1080"
-        "&devicePixelRatio=1"
-        "&format=png"
-        "&version=2.9.4"
-        "&backgroundColor=transparent"
-        "&c=" + quote(config)
+    # Cria a camada de texto (amarelo queimado)
+    overlay_url = _quickchart_overlay(
+        lines,
+        color="#E8A317",
+        background="rgba(0,0,0,0)",
+        height=420
     )
+
+    # Coloca o texto embaixo da imagem original
+    final_url = (
+        "https://quickchart.io/watermark"
+        "?mainImageUrl=" + quote(image_url, safe="")
+        + "&markImageUrl=" + quote(overlay_url, safe="")
+        + "&markRatio=1"
+        + "&position=bottomMiddle"
+        + "&margin=0"
+    )
+
+    return final_url
 '''
 
 s = s[:start] + fn + s[end:]
 
 # Atualiza versões
-for old in ["12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
-    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.11")
-    s = s.replace(f"Instagram {old}", "Instagram 12.11")
+for old in ["12.11", "12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
+    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.12")
+    s = s.replace(f"Instagram {old}", "Instagram 12.12")
 
-s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.11 ATIVA")
+s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.12 ATIVA")
 
 p.write_text(s, encoding="utf-8")
 
-print("Patch Instagram 12.11 aplicado com sucesso.")
+print("Patch Instagram 12.12 aplicado com sucesso.")
