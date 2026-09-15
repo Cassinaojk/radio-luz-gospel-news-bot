@@ -3,87 +3,98 @@ from pathlib import Path
 p = Path("bot/main.py")
 s = p.read_text(encoding="utf-8")
 
-# Corrige a regex antiga
-s = s.replace(
-    r'match = re.match(r"(.+?\[.!?:\])(?:\\s+\|$)(.\*)$", clean)',
-    r'match = re.match(r"(.+?[.!?:])(?:\s+|$)(.*)$", clean)'
-)
-
 start = s.index("def instagram_art_url(post):")
 end = s.index("\ndef instagram_promote", start)
 
-fn = '''
+fn = r'''
 def instagram_art_url(post):
-    """Instagram 12.2 - texto amarelo e branco sem faixa."""
+    """
+    Instagram 12.3
+    Uma única renderização QuickChart.
+    """
 
     from urllib.parse import quote
+    import json
 
     image_url = social_image_url(post)
 
-    text = re.sub(
-        r"\\s+",
+    title = re.sub(
+        r"\s+",
         " ",
         (
             post.get("title")
             or post.get("resumo")
-            or post.get("summary")
             or ""
         ).strip()
     )
 
-    if not image_url or not text:
-        return None
+    if not image_url or not title:
+        return image_url
 
-    words = text.split()
+    words = title.split()
 
     first_line = " ".join(words[:4])
+    remaining = " ".join(words[4:])
 
-    remaining_text = " ".join(words[4:])
+    lines = [first_line]
 
-    remaining_lines = _instagram_wrap_text(
-        remaining_text,
-        max_chars=26,
-        max_lines=3
-    )
-
-    yellow_overlay = _quickchart_overlay(
-        [first_line],
-        "#D4A017"
-    )
-
-    result = image_url
-
-    if remaining_lines:
-        white_overlay = _quickchart_overlay(
-            remaining_lines,
-            "#FFFFFF"
+    if remaining:
+        extra = _instagram_wrap_text(
+            remaining,
+            max_chars=26,
+            max_lines=3
         )
+        lines.extend(extra)
 
-        result = (
-            "https://quickchart.io/watermark?"
-            + "mainImageUrl=" + quote(result, safe="")
-            + "&markImageUrl=" + quote(white_overlay, safe="")
-            + "&position=bottomLeft"
-            + "&margin=40"
-            + "&markRatio=1"
-        )
+    text_js = json.dumps(lines, ensure_ascii=False)
+    image_js = json.dumps(image_url, ensure_ascii=False)
 
-    result = (
-        "https://quickchart.io/watermark?"
-        + "mainImageUrl=" + quote(result, safe="")
-        + "&markImageUrl=" + quote(yellow_overlay, safe="")
-        + "&position=bottomLeft"
-        + "&margin=40"
-        + "&markRatio=1"
+    config = f"""{{
+      type:'bar',
+      data:{{
+        labels:[''],
+        datasets:[{{data:[0]}}]
+      }},
+      options:{{
+        responsive:false,
+        animation:false,
+        maintainAspectRatio:false,
+        legend:{{display:false}},
+        scales:{{
+          xAxes:[{{display:false}}],
+          yAxes:[{{display:false}}]
+        }},
+        plugins:{{
+          backgroundImageUrl:{image_js}
+        }},
+        title:{{
+          display:true,
+          position:'bottom',
+          text:{text_js},
+          fontSize:30,
+          fontStyle:'bold',
+          fontColor:'#FFFFFF',
+          padding:35
+        }}
+      }}
+    }}"""
+
+    return (
+        "https://quickchart.io/chart"
+        "?width=1080"
+        "&height=1080"
+        "&devicePixelRatio=1"
+        "&format=png"
+        "&version=2.9.4"
+        "&backgroundColor=transparent"
+        "&c=" + quote(config)
     )
-
-    return result
 '''
 
 s = s[:start] + fn + s[end:]
 
-s = s.replace("VERSÃO 12.1", "VERSÃO 12.2")
+s = s.replace("VERSÃO 12.2", "VERSÃO 12.3")
 
 p.write_text(s, encoding="utf-8")
 
-print("Patch Instagram 12.2 aplicado com sucesso.")
+print("Patch Instagram 12.3 aplicado com sucesso.")
