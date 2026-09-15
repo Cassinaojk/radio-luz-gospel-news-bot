@@ -41,7 +41,7 @@ GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 80
 
-# 3650 dias (~10 anos): a duplicidade passa a ser controlada
+# 3650 dias (\~10 anos): a duplicidade passa a ser controlada
 # principalmente pela URL da fonte, não por uma janela curta de idade.
 MAX_AGE_DAYS = 3650
 
@@ -1528,11 +1528,9 @@ def html(a,d):
     out=_original_html(a,d)
     out=re.sub(r'<p><small>Fonte:\s*<a\s+href="[^"]*"[^>]*>.*?</a></small></p>',"",out,count=1,flags=re.I|re.S)
     out=re.sub(r'<p><small>Fonte:.*?</small></p>',"",out,count=1,flags=re.I|re.S)
-    name=source_name(a.get("url",""))
-    attribution=f'<p><small>Fonte de apuração: {name}</small></p>'
     source_url=str(a.get("url","")).strip()
     marker='<!-- RADIO_LUZ_GOSPEL_SOURCE_URL: '+source_url+' -->'
-    return out.rstrip()+"\n"+attribution+"\n"+marker
+    return out.rstrip()+"\n"+marker
 
 
 # ============================================================
@@ -1633,8 +1631,7 @@ def facebook_promote(post, source_name_text):
         "📰 RÁDIO LUZ GOSPEL\n\n"
         f"{post.get('title', '').strip()}\n\n"
         "🎵 Confira a matéria completa no site:\n"
-        f"👉 {url}\n\n"
-        f"Fonte de apuração: {source_name_text}"
+        f"👉 {url}"
     )
     endpoint = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/feed"
     try:
@@ -1674,7 +1671,7 @@ def _instagram_text_parts(text, max_lines=4):
     if not clean:
         return [], []
     # Primeira frase termina em ., !, ? ou :; se não houver, usa a primeira linha.
-    match = re.match(r"(.+?[.!?:])(?:\s+|$)(.*)$", clean)
+    match = re.match(r"(.+?[.!?:])(?:\s+|\( )(.*) \)", clean)
     if match:
         first, rest = match.group(1).strip(), match.group(2).strip()
     else:
@@ -1794,7 +1791,6 @@ def instagram_promote(post, source_name_text):
         f"{post.get('title', '').strip()}\n\n"
         "🔗 Leia a matéria completa:\n"
         f"{url}\n\n"
-        f"Fonte de apuração: {source_name_text}\n\n"
         "#RadioLuzGospel #Gospel #NoticiasGospel #MusicaGospel"
     )
 
@@ -1894,8 +1890,7 @@ def telegram_promote(post, source_name_text):
         "📰 RÁDIO LUZ GOSPEL\n\n"
         f"{post.get('title', '').strip()}\n\n"
         "🎵 Confira a matéria completa:\n"
-        f"👉 {url}\n\n"
-        f"Fonte de apuração: {source_name_text}"
+        f"👉 {url}"
     )
     endpoint = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
