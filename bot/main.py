@@ -8,7 +8,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 9.3")
-print("VERSÃO 11.0 ATIVA: Instagram força arte em todos os posts | faixa preta + amarelo/branco")
+print("VERSÃO 12.0 ATIVA: Instagram força arte | faixa preta semitransparente + primeira frase amarela + restante branco")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -1653,7 +1653,7 @@ def facebook_promote(post, source_name_text):
 
 
 def _instagram_wrap_text(text, max_chars=34, max_lines=4):
-    """Quebra texto sem inserir o literal \\n na arte."""
+    """Quebra texto em linhas reais, sem desenhar o literal \\n."""
     words = re.sub(r"\s+", " ", str(text or "").strip()).split()
     lines, current = [], ""
     for word in words:
@@ -1665,14 +1665,32 @@ def _instagram_wrap_text(text, max_chars=34, max_lines=4):
             current = candidate
     if current:
         lines.append(current)
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        lines[-1] = lines[-1][:max_chars - 3].rstrip() + "..."
-    return lines
+    return lines[:max_lines]
 
 
-def _quickchart_overlay(lines, color, background="transparent", height=360):
-    """Cria uma camada pública QuickChart; sem \n literal e sem negrito."""
+def _instagram_text_parts(text, max_lines=4):
+    """Separa a primeira frase para amarelo e o restante para branco."""
+    clean = re.sub(r"\s+", " ", str(text or "").strip())
+    if not clean:
+        return [], []
+    # Primeira frase termina em ., !, ? ou :; se não houver, usa a primeira linha.
+    match = re.match(r"(.+?[.!?:])(?:\s+|$)(.*)$", clean)
+    if match:
+        first, rest = match.group(1).strip(), match.group(2).strip()
+    else:
+        words = clean.split()
+        first = " ".join(words[:6])
+        rest = " ".join(words[6:])
+    first_lines = _instagram_wrap_text(first, max_chars=34, max_lines=1)
+    remaining_capacity = max(0, max_lines - len(first_lines))
+    rest_lines = _instagram_wrap_text(rest, max_chars=34, max_lines=remaining_capacity)
+    if rest_lines and len(rest_lines) == remaining_capacity and len(rest.split()) > 1:
+        rest_lines[-1] = rest_lines[-1].rstrip(" .") + "..."
+    return first_lines, rest_lines
+
+
+def _quickchart_overlay(lines, color, background="rgba(0,0,0,0)", height=360):
+    """Cria camada PNG transparente com texto grande, branco/amarelo e negrito."""
     from urllib.parse import quote
     config = {
         "type": "bar",
@@ -1682,60 +1700,53 @@ def _quickchart_overlay(lines, color, background="transparent", height=360):
             "animation": False,
             "maintainAspectRatio": False,
             "legend": {"display": False},
-            "layout": {"padding": {"top": 22, "right": 42, "bottom": 18, "left": 42}},
-            "scales": {
-                "xAxes": [{"display": False, "gridLines": {"display": False}}],
-                "yAxes": [{"display": False, "gridLines": {"display": False}}],
-            },
+            "layout": {"padding": {"top": 20, "right": 70, "bottom": 20, "left": 70}},
+            "scales": {"xAxes": [{"display": False}], "yAxes": [{"display": False}]},
             "title": {
                 "display": bool(lines),
                 "position": "top",
                 "text": lines,
                 "fontSize": 30,
-                "fontStyle": "normal",
+                "fontStyle": "bold",
                 "fontColor": color,
                 "padding": 8,
             },
         },
     }
     config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
-    return (
-        "https://quickchart.io/chart?width=1080&height=" + str(height)
-        + "&devicePixelRatio=1&format=png&version=2.9.4"
-        + "&backgroundColor=" + quote(background, safe="")
-        + "&c=" + quote(config_json, safe="")
-    )
+    return ("https://quickchart.io/chart?width=1080&height=" + str(height)
+            + "&devicePixelRatio=1&format=png&version=2.9.4"
+            + "&backgroundColor=" + quote(background, safe="")
+            + "&c=" + quote(config_json, safe=""))
 
 
 def _quickchart_band(height=360):
-    """Faixa preta semitransparente, ocupando toda a largura."""
+    """Camada preta semitransparente, transparente fora da faixa."""
     from urllib.parse import quote
     config = {
         "type": "bar",
-        "data": {"labels": [""], "datasets": [{"data": [0], "backgroundColor": "rgba(0,0,0,0.72)", "borderWidth": 0}]},
+        "data": {"labels": [""], "datasets": [{"data": [100], "backgroundColor": "rgba(0,0,0,0.72)", "borderWidth": 0}]},
         "options": {
             "responsive": False, "animation": False, "maintainAspectRatio": False,
             "legend": {"display": False},
-            "scales": {"xAxes": [{"display": False}], "yAxes": [{"display": False}]},
+            "layout": {"padding": 0},
+            "scales": {
+                "xAxes": [{"display": False, "gridLines": {"display": False}, "stacked": True}],
+                "yAxes": [{"display": False, "gridLines": {"display": False}, "stacked": True, "ticks": {"min": 0, "max": 100}}],
+            },
         },
     }
     config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
-    return (
-        "https://quickchart.io/chart?width=1080&height=" + str(height)
-        + "&devicePixelRatio=1&format=png&version=2.9.4"
-        + "&backgroundColor=rgba(0,0,0,0)&c=" + quote(config_json, safe="")
-    )
+    return ("https://quickchart.io/chart?width=1080&height=" + str(height)
+            + "&devicePixelRatio=1&format=png&version=2.9.4"
+            + "&backgroundColor=rgba(0,0,0,0)&c=" + quote(config_json, safe=""))
 
 
 def instagram_art_url(post):
-    """Gera obrigatoriamente a arte do Instagram.
+    """Gera obrigatoriamente a arte final do Instagram.
 
-    A arte é composta por:
-    - faixa preta semitransparente na parte inferior;
-    - primeira linha amarela;
-    - demais linhas brancas;
-    - fonte normal, sem negrito;
-    - máximo de quatro linhas.
+    Visual obrigatório: faixa preta semitransparente inferior; primeira frase
+    amarela; restante branco; texto em negrito; no máximo quatro linhas.
     """
     from urllib.parse import quote
     image_url = social_image_url(post)
@@ -1744,24 +1755,19 @@ def instagram_art_url(post):
         print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
         return None
 
-    lines = _instagram_wrap_text(text, max_chars=34, max_lines=4)
-    first_line = lines[:1]
-    remaining_lines = lines[1:]
-
-    # Camadas separadas permitem misturar amarelo e branco sem usar texto literal \\n.
-    urls = [_quickchart_band()]
+    first_lines, remaining_lines = _instagram_text_parts(text, max_lines=4)
+    # A faixa é aplicada primeiro; depois o texto é aplicado por cima dela.
+    overlay_urls = [_quickchart_band()]
     if remaining_lines:
-        urls.append(_quickchart_overlay(remaining_lines, "#FFFFFF"))
-    if first_line:
-        urls.append(_quickchart_overlay(first_line, "#FFB51B"))
+        overlay_urls.append(_quickchart_overlay(remaining_lines, "#FFFFFF"))
+    if first_lines:
+        overlay_urls.append(_quickchart_overlay(first_lines, "#FFB51B"))
 
     result = image_url
-    for overlay_url in urls:
-        result = (
-            "https://quickchart.io/watermark?mainImageUrl=" + quote(result, safe="")
-            + "&markImageUrl=" + quote(overlay_url, safe="")
-            + "&markRatio=1&position=bottomMiddle&margin=0"
-        )
+    for overlay_url in overlay_urls:
+        result = ("https://quickchart.io/watermark?mainImageUrl=" + quote(result, safe="")
+                  + "&markImageUrl=" + quote(overlay_url, safe="")
+                  + "&markRatio=1&position=bottomMiddle&margin=0")
     return result
 
 def instagram_promote(post, source_name_text):
