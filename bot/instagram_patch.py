@@ -9,92 +9,83 @@ end = s.index("\ndef instagram_promote", start)
 fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.3
-    Uma única renderização QuickChart.
+    Instagram 12.5
+    Visual fiel ao 12.1:
+    - Imagem original (sem faixa preta)
+    - Primeira linha amarela (#FFB51B)
+    - Restante em branco
+    - Texto em negrito
+    - Máximo 4 linhas
+    - Mínimo de requests (2 overlays + 1 watermark)
     """
-
     from urllib.parse import quote
-    import json
 
     image_url = social_image_url(post)
 
-    title = re.sub(
+    text = re.sub(
         r"\s+",
         " ",
         (
-            post.get("title")
-            or post.get("resumo")
+            post.get("resumo")
+            or post.get("summary")
+            or post.get("title")
             or ""
         ).strip()
     )
 
-    if not image_url or not title:
+    if not image_url or not text:
+        print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
+        return None
+
+    first_lines, remaining_lines = _instagram_text_parts(text, max_lines=4)
+
+    # Garante no máximo 4 linhas no total
+    total_lines = (first_lines or []) + (remaining_lines or [])
+    if len(total_lines) > 4:
+        remaining_lines = remaining_lines[: max(0, 4 - len(first_lines or []))]
+
+    overlay_urls = []
+
+    # Camada branca (restante)
+    if remaining_lines:
+        overlay_urls.append(
+            _quickchart_overlay(remaining_lines, "#FFFFFF", height=380)
+        )
+
+    # Camada amarela (primeira linha) — fica por cima
+    if first_lines:
+        overlay_urls.append(
+            _quickchart_overlay(first_lines, "#FFB51B", height=380)
+        )
+
+    if not overlay_urls:
         return image_url
 
-    words = title.split()
-
-    first_line = " ".join(words[:4])
-    remaining = " ".join(words[4:])
-
-    lines = [first_line]
-
-    if remaining:
-        extra = _instagram_wrap_text(
-            remaining,
-            max_chars=26,
-            max_lines=3
+    # Compõe as camadas sobre a imagem original (posição inferior)
+    result = image_url
+    for overlay_url in overlay_urls:
+        result = (
+            "https://quickchart.io/watermark"
+            "?mainImageUrl=" + quote(result, safe="")
+            + "&markImageUrl=" + quote(overlay_url, safe="")
+            + "&markRatio=1"
+            + "&position=bottomMiddle"
+            + "&margin=0"
         )
-        lines.extend(extra)
 
-    text_js = json.dumps(lines, ensure_ascii=False)
-    image_js = json.dumps(image_url, ensure_ascii=False)
-
-    config = f"""{{
-      type:'bar',
-      data:{{
-        labels:[''],
-        datasets:[{{data:[0]}}]
-      }},
-      options:{{
-        responsive:false,
-        animation:false,
-        maintainAspectRatio:false,
-        legend:{{display:false}},
-        scales:{{
-          xAxes:[{{display:false}}],
-          yAxes:[{{display:false}}]
-        }},
-        plugins:{{
-          backgroundImageUrl:{image_js}
-        }},
-        title:{{
-          display:true,
-          position:'bottom',
-          text:{text_js},
-          fontSize:30,
-          fontStyle:'bold',
-          fontColor:'#FFFFFF',
-          padding:35
-        }}
-      }}
-    }}"""
-
-    return (
-        "https://quickchart.io/chart"
-        "?width=1080"
-        "&height=1080"
-        "&devicePixelRatio=1"
-        "&format=png"
-        "&version=2.9.4"
-        "&backgroundColor=transparent"
-        "&c=" + quote(config)
-    )
+    return result
 '''
 
 s = s[:start] + fn + s[end:]
 
-s = s.replace("VERSÃO 12.2", "VERSÃO 12.3")
+# Atualiza as strings de versão
+s = s.replace("VERSÃO 12.3", "VERSÃO 12.5")
+s = s.replace("VERSÃO 12.4", "VERSÃO 12.5")
+s = s.replace("VERSÃO 12.2", "VERSÃO 12.5")
+s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.5 ATIVA")
+s = s.replace("Instagram 12.3", "Instagram 12.5")
+s = s.replace("Instagram 12.4", "Instagram 12.5")
 
 p.write_text(s, encoding="utf-8")
 
-print("Patch Instagram 12.3 aplicado com sucesso.")
+print("Patch Instagram 12.5 aplicado com sucesso.")
