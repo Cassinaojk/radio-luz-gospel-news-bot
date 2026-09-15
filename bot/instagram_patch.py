@@ -9,11 +9,11 @@ end = s.index("\ndef instagram_promote", start)
 fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.10 — versão estável
+    Instagram 12.11 — versão limpa
     - Imagem original de fundo
     - Sem faixa preta
+    - Sem marca d'água / logo
     - Texto todo em amarelo queimado (#E8A317)
-    - Sem logo (temporariamente) para evitar erro 400 de URL longa
     """
     from urllib.parse import quote
     import json
@@ -35,7 +35,7 @@ def instagram_art_url(post):
         print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
         return None
 
-    # Quebra inteligente
+    # Quebra inteligente do título
     words = title.split()
     first = " ".join(words[:5])
     rest = " ".join(words[5:])
@@ -107,12 +107,12 @@ def instagram_art_url(post):
 s = s[:start] + fn + s[end:]
 
 # Atualiza versões
-for old in ["12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
-    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.10")
-    s = s.replace(f"Instagram {old}", "Instagram 12.10")
+for old in ["12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
+    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.11")
+    s = s.replace(f"Instagram {old}", "Instagram 12.11")
 
-s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.10 ATIVA")
+s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.11 ATIVA")
 
 p.write_text(s, encoding="utf-8")
 
-print("Patch Instagram 12.10 aplicado com sucesso.")
+print("Patch Instagram 12.11 aplicado com sucesso.")
