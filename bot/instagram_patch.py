@@ -1,18 +1,9 @@
-from pathlib import Path
-
-p = Path("bot/main.py")
-s = p.read_text(encoding="utf-8")
-
-start = s.index("def instagram_art_url(post):")
-end = s.index("\ndef instagram_promote", start)
-
-fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.15
+    Instagram 12.16
     - Texto dentro de retângulo com cantos arredondados
-    - Fundo levemente transparente + bordas azuladas
-    - Texto amarelo queimado (#E8A317)
+    - Fundo levemente transparente (azul) + borda azul
+    - Texto amarelo queimado (#E8A317) sem cortar
     - Logo pequeno da rádio abaixo do retângulo
     - Tudo na parte inferior da imagem
     """
@@ -36,20 +27,19 @@ def instagram_art_url(post):
         print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
         return None
 
-    # Quebra inteligente do título
+    # Quebra inteligente do título (evita cortar palavras)
     words = title.split()
     first = " ".join(words[:5])
     rest = " ".join(words[5:])
 
     lines = [first]
     if rest:
-        extra = _instagram_wrap_text(rest, max_chars=26, max_lines=3)
+        extra = _instagram_wrap_text(rest, max_chars=28, max_lines=3)
         lines.extend(extra)
     lines = lines[:4]
 
     # =========================================================
-    # 1) Overlay do texto com fundo semi-transparente
-    #    (simula o retângulo arredondado)
+    # Overlay: retângulo arredondado + borda azul + texto
     # =========================================================
     config = {
         "type": "bar",
@@ -57,10 +47,11 @@ def instagram_art_url(post):
             "labels": [""],
             "datasets": [{
                 "data": [100],
-                "backgroundColor": "rgba(15, 40, 90, 0.55)",  # azul escuro semi-transparente
-                "borderWidth": 0,
-                "barPercentage": 1.0,
-                "categoryPercentage": 1.0
+                "backgroundColor": "rgba(12, 35, 85, 0.58)",   # azul escuro leve transparência
+                "borderColor": "#3B82F6",                      # borda azul
+                "borderWidth": 4,
+                "barPercentage": 0.92,
+                "categoryPercentage": 0.92
             }]
         },
         "options": {
@@ -70,10 +61,10 @@ def instagram_art_url(post):
             "legend": {"display": False},
             "layout": {
                 "padding": {
-                    "top": 280,
-                    "right": 55,
-                    "bottom": 70,
-                    "left": 55
+                    "top": 300,      # empurra o retângulo para baixo
+                    "right": 48,
+                    "bottom": 55,
+                    "left": 48
                 }
             },
             "scales": {
@@ -84,14 +75,20 @@ def instagram_art_url(post):
                     "ticks": {"min": 0, "max": 100}
                 }]
             },
+            "plugins": {
+                "roundedBars": {
+                    "cornerRadius": 22,
+                    "allCorners": True
+                }
+            },
             "title": {
                 "display": True,
                 "position": "bottom",
                 "text": lines,
-                "fontSize": 34,
+                "fontSize": 32,
                 "fontStyle": "bold",
                 "fontColor": "#E8A317",
-                "padding": 18
+                "padding": 16
             }
         }
     }
@@ -101,7 +98,7 @@ def instagram_art_url(post):
     overlay_url = (
         "https://quickchart.io/chart"
         "?width=1080"
-        "&height=520"
+        "&height=540"
         "&devicePixelRatio=1"
         "&format=png"
         "&version=2.9.4"
@@ -109,43 +106,30 @@ def instagram_art_url(post):
         "&c=" + quote(config_json)
     )
 
-    # =========================================================
-    # 2) Logo pequeno da rádio (marque d'água)
-    #    Substitua a URL abaixo pela URL pública do seu logo
-    # =========================================================
-    LOGO_URL = "https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEg3P-t5wYd2jLgZzAE_p2h7p6F20af81jpj436lFfjtX1h3B3P90clzdyG0G5kLTS0bgGsV8q3pcoUgfNHMeeOa_EM6jo21Yj50qBEtLjPq7tlS2Nla7aB4k_PqvTUPYBkn0m2obR4hgGOgP864KuHskzNEjUoBjUpntnwhYMJNVZYThote-ENKHftfGPAl/w900-h562-p-k-no-nu/1000008407.png"
-    # Primeiro coloca o texto (retângulo) na parte de baixo
+    LOGO_URL = (
+        "https://blogger.googleusercontent.com/img/b/R29vZ2xl/"
+        "AVvXsEg3P-t5wYd2jLgZzAE_p2h7p6F20af81jpj436lFfjtX1h3B3P90clzdyG0G5kLTS0bgGsV8q3pcoUgfNHMeeOa_EM6jo21Yj50qBEtLjPq7tlS2Nla7aB4k_PqvTUPYBkn0m2obR4hgGOgP864KuHskzNEjUoBjUpntnwhYMJNVZYThote-ENKHftfGPAl/"
+        "w900-h562-p-k-no-nu/1000008407.png"
+    )
+
+    # 1) Coloca o retângulo + texto na parte de baixo
     with_text = (
         "https://quickchart.io/watermark"
         "?mainImageUrl=" + quote(image_url, safe="")
         + "&markImageUrl=" + quote(overlay_url, safe="")
         + "&markRatio=1"
         + "&position=bottomMiddle"
-        + "&margin=12"
+        + "&margin=10"
     )
 
-    # Depois adiciona o logo bem pequeno abaixo do texto
+    # 2) Logo bem pequeno abaixo do retângulo
     final_url = (
         "https://quickchart.io/watermark"
         "?mainImageUrl=" + quote(with_text, safe="")
         + "&markImageUrl=" + quote(LOGO_URL, safe="")
-        + "&markRatio=0.11"          # tamanho bem pequeno
+        + "&markRatio=0.10"
         + "&position=bottomMiddle"
-        + "&margin=8"
+        + "&margin=6"
     )
 
     return final_url
-'''
-
-s = s[:start] + fn + s[end:]
-
-# Atualiza versões
-for old in ["12.14", "12.13", "12.12", "12.11", "12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
-    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.15")
-    s = s.replace(f"Instagram {old}", "Instagram 12.15")
-
-s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.15 ATIVA")
-
-p.write_text(s, encoding="utf-8")
-
-print("Patch Instagram 12.15 aplicado com sucesso.")
