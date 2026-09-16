@@ -9,13 +9,14 @@ end = s.index("\ndef instagram_promote", start)
 fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.13
-    - Texto apenas na parte inferior da imagem
+    Instagram 12.14
+    - Texto forçado na parte inferior da imagem
     - Fonte maior e mais nítida
     - Amarelo queimado (#E8A317)
     - Sem faixa preta e sem logo
     """
     from urllib.parse import quote
+    import json
 
     image_url = social_image_url(post)
 
@@ -46,22 +47,69 @@ def instagram_art_url(post):
 
     lines = lines[:4]
 
-    # Overlay com fonte maior e texto bem na parte de baixo
-    overlay_url = _quickchart_overlay(
-        lines,
-        color="#E8A317",
-        background="rgba(0,0,0,0)",
-        height=480          # altura maior → texto fica mais embaixo
+    text_js = json.dumps(lines, ensure_ascii=False)
+
+    # Overlay com o texto forçado na PARTE DE BAIXO da camada
+    config = {
+        "type": "bar",
+        "data": {
+            "labels": [""],
+            "datasets": [{
+                "data": [0],
+                "backgroundColor": "rgba(0,0,0,0)",
+                "borderWidth": 0
+            }]
+        },
+        "options": {
+            "responsive": False,
+            "animation": False,
+            "maintainAspectRatio": False,
+            "legend": {"display": False},
+            "layout": {
+                "padding": {
+                    "top": 320,      # empurra o texto bem para baixo
+                    "right": 50,
+                    "bottom": 40,
+                    "left": 50
+                }
+            },
+            "scales": {
+                "xAxes": [{"display": False}],
+                "yAxes": [{"display": False}]
+            },
+            "title": {
+                "display": True,
+                "position": "bottom",   # texto na parte inferior da camada
+                "text": lines,
+                "fontSize": 36,
+                "fontStyle": "bold",
+                "fontColor": "#E8A317",
+                "padding": 20
+            }
+        }
+    }
+
+    config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+
+    overlay_url = (
+        "https://quickchart.io/chart"
+        "?width=1080"
+        "&height=500"
+        "&devicePixelRatio=1"
+        "&format=png"
+        "&version=2.9.4"
+        "&backgroundColor=rgba(0,0,0,0)"
+        "&c=" + quote(config_json)
     )
 
-    # Força o texto a ficar na parte inferior
+    # Coloca a camada na parte de baixo da imagem original
     final_url = (
         "https://quickchart.io/watermark"
         "?mainImageUrl=" + quote(image_url, safe="")
         + "&markImageUrl=" + quote(overlay_url, safe="")
         + "&markRatio=1"
         + "&position=bottomMiddle"
-        + "&margin=20"          # um pouco de margem da borda inferior
+        + "&margin=15"
     )
 
     return final_url
@@ -70,12 +118,12 @@ def instagram_art_url(post):
 s = s[:start] + fn + s[end:]
 
 # Atualiza versões
-for old in ["12.12", "12.11", "12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
-    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.13")
-    s = s.replace(f"Instagram {old}", "Instagram 12.13")
+for old in ["12.13", "12.12", "12.11", "12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
+    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.14")
+    s = s.replace(f"Instagram {old}", "Instagram 12.14")
 
-s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.13 ATIVA")
+s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.14 ATIVA")
 
 p.write_text(s, encoding="utf-8")
 
-print("Patch Instagram 12.13 aplicado com sucesso.")
+print("Patch Instagram 12.14 aplicado com sucesso.")
