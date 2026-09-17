@@ -1,4 +1,4 @@
-# Rádio Luz Gospel — Robô de Notícias 9.1 FINAL
+# Rádio Luz Gospel — Robô de Notícias 9.3 FINAL
 
 Robô GitHub Actions para coletar notícias de fontes gospel, gerar matérias originais em português do Brasil com Gemini e publicar no Blogger.
 
