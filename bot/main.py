@@ -965,7 +965,7 @@ def html(article, generated):
 
 
 def main():
-    print("News Gospel + UAU Gospel + Folha Gospel Música + Guiame Música | /musicas sem Fuxico | Versão 9.4")
+    print("News Gospel + UAU Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel | /musicas sem Fuxico")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls = existing(api)
@@ -1566,9 +1566,6 @@ selfbot.SOURCES = [
         "feeds": [],
         "section_only": True,
         "music_page": True,
-        # IMPORTANTE: a única página usada para descobrir matérias é
-        # https://folhagospel.com/musica/ . Não usa a home nem outras seções.
-        # Os links das matérias podem ter URL própria fora de /musica/.
         "path_prefix": "",
     },
     {
@@ -1578,6 +1575,33 @@ selfbot.SOURCES = [
         "section_only": True,
         "music_page": True,
         "path_prefix": "/musica",
+    },
+    {
+        "nome": "Gospel Mais",
+        "url": "https://gospelmais.com/",
+        "feeds": [
+            "https://gospelmais.com/feed/",
+            "https://gospelmais.com/feed",
+        ],
+        "music_page": False,
+    },
+    {
+        "nome": "Exibir Gospel",
+        "url": "https://exibirgospel.com.br/",
+        "feeds": [
+            "https://exibirgospel.com.br/feed/",
+            "https://exibirgospel.com.br/feed",
+        ],
+        "music_page": False,
+    },
+    {
+        "nome": "iGospel",
+        "url": "https://www.igospel.org.br/",
+        "feeds": [
+            "https://www.igospel.org.br/feed/",
+            "https://www.igospel.org.br/feed",
+        ],
+        "music_page": False,
     },
 ]
 
