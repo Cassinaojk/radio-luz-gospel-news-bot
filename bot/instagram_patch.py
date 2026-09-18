@@ -9,9 +9,11 @@ end = s.index("\ndef instagram_promote", start)
 fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.17
-    - Texto amarelo claro (#FFF3A3) na parte inferior
-    - backgroundImageUrl (watermark API está quebrada)
+    Instagram 12.18
+    - Texto amarelo claro (#FFF3A3) dentro de faixa branca semi-transparente
+    - Borda fina azulada
+    - Faixa se ajusta ao tamanho do texto (altura dinâmica)
+    - backgroundImageUrl (watermark API quebrada)
     - Logs de diagnóstico
     """
     from urllib.parse import quote
@@ -47,12 +49,19 @@ def instagram_art_url(post):
         lines.extend(extra)
     lines = lines[:4]
 
+    num_lines = len(lines)
+
+    # Altura da faixa proporcional ao número de linhas (encaixa o texto)
+    # ~38px por linha + padding interno
+    faixa_height = 38 * num_lines + 36
+    top_padding = 1080 - faixa_height - 20   # deixa a faixa bem embaixo
+
     config = {
         "type": "bar",
         "data": {
             "labels": [""],
             "datasets": [{
-                "data": [0],
+                "data": [1],
                 "backgroundColor": "rgba(0,0,0,0)",
                 "borderWidth": 0
             }]
@@ -64,24 +73,45 @@ def instagram_art_url(post):
             "legend": {"display": False},
             "layout": {
                 "padding": {
-                    "top": 680,
-                    "right": 35,
-                    "bottom": 25,
-                    "left": 35
+                    "top": top_padding,
+                    "right": 28,
+                    "bottom": 12,
+                    "left": 28
                 }
             },
             "scales": {
-                "xAxes": [{"display": False}],
-                "yAxes": [{"display": False}]
+                "xAxes": [{
+                    "display": False,
+                    "ticks": {"min": 0, "max": 1}
+                }],
+                "yAxes": [{
+                    "display": False,
+                    "ticks": {"min": 0, "max": 1}
+                }]
             },
             "title": {
                 "display": True,
                 "position": "bottom",
                 "text": lines,
-                "fontSize": 32,
+                "fontSize": 30,
                 "fontStyle": "bold",
                 "fontColor": "#FFF3A3",
-                "padding": 10
+                "padding": 8
+            },
+            "annotation": {
+                "annotations": [{
+                    "type": "box",
+                    "drawTime": "beforeDatasetsDraw",
+                    "xScaleID": "x-axis-0",
+                    "yScaleID": "y-axis-0",
+                    "xMin": -0.5,
+                    "xMax": 1.5,
+                    "yMin": -0.5,
+                    "yMax": 1.5,
+                    "backgroundColor": "rgba(255, 255, 255, 0.72)",
+                    "borderColor": "#5B9BD5",
+                    "borderWidth": 2
+                }]
             },
             "plugins": {
                 "backgroundImageUrl": image_url
@@ -108,12 +138,12 @@ def instagram_art_url(post):
 
 s = s[:start] + fn + s[end:]
 
-for old in ["12.16", "12.15", "12.14", "12.13", "12.12", "12.11", "12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
-    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.17")
-    s = s.replace(f"Instagram {old}", "Instagram 12.17")
+for old in ["12.17", "12.16", "12.15", "12.14", "12.13", "12.12", "12.11", "12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
+    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.18")
+    s = s.replace(f"Instagram {old}", "Instagram 12.18")
 
-s = s.replace("VERSÃO 12.16 ATIVA", "VERSÃO 12.17 ATIVA")
-s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.17 ATIVA")
+s = s.replace("VERSÃO 12.17 ATIVA", "VERSÃO 12.18 ATIVA")
+s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.18 ATIVA")
 
 p.write_text(s, encoding="utf-8")
-print("Patch Instagram 12.17 aplicado (cor #FFF3A3 + logs de diagnóstico).")
+print("Patch Instagram 12.18 aplicado (faixa branca semi-transparente + borda azul + texto #FFF3A3).")
