@@ -9,11 +9,10 @@ end = s.index("\ndef instagram_promote", start)
 fn = r'''
 def instagram_art_url(post):
     """
-    Instagram 12.15
-    - Texto amarelo queimado (#E8A317) forçado na parte inferior
-    - Fonte maior e nítida
-    - Usa backgroundImageUrl (sem watermark – API quebrada)
-    - Sem faixa preta e sem logo
+    Instagram 12.17
+    - Texto amarelo claro (#FFF3A3) na parte inferior
+    - backgroundImageUrl (watermark API está quebrada)
+    - Logs de diagnóstico
     """
     from urllib.parse import quote
     import json
@@ -35,6 +34,8 @@ def instagram_art_url(post):
         print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
         return None
 
+    print(f"🔍 Instagram debug image_url: {image_url}")
+
     # Quebra inteligente
     words = title.split()
     first = " ".join(words[:5])
@@ -42,12 +43,10 @@ def instagram_art_url(post):
 
     lines = [first]
     if rest:
-        extra = _instagram_wrap_text(rest, max_chars=28, max_lines=3)
+        extra = _instagram_wrap_text(rest, max_chars=26, max_lines=3)
         lines.extend(extra)
-
     lines = lines[:4]
 
-    # Chart com a imagem do post como fundo + texto na base
     config = {
         "type": "bar",
         "data": {
@@ -65,10 +64,10 @@ def instagram_art_url(post):
             "legend": {"display": False},
             "layout": {
                 "padding": {
-                    "top": 720,      # empurra o texto bem para baixo
-                    "right": 40,
-                    "bottom": 30,
-                    "left": 40
+                    "top": 680,
+                    "right": 35,
+                    "bottom": 25,
+                    "left": 35
                 }
             },
             "scales": {
@@ -79,10 +78,10 @@ def instagram_art_url(post):
                 "display": True,
                 "position": "bottom",
                 "text": lines,
-                "fontSize": 34,
+                "fontSize": 32,
                 "fontStyle": "bold",
                 "fontColor": "#FFF3A3",
-                "padding": 12
+                "padding": 10
             },
             "plugins": {
                 "backgroundImageUrl": image_url
@@ -103,19 +102,18 @@ def instagram_art_url(post):
         "&c=" + quote(config_json)
     )
 
+    print(f"🔍 Instagram debug final_url: {final_url[:180]}...")
     return final_url
 '''
 
 s = s[:start] + fn + s[end:]
 
-# Atualiza versões
-for old in ["12.14", "12.13", "12.12", "12.11", "12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
-    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.15")
-    s = s.replace(f"Instagram {old}", "Instagram 12.15")
+for old in ["12.16", "12.15", "12.14", "12.13", "12.12", "12.11", "12.10", "12.9", "12.8", "12.7", "12.6", "12.5", "12.4", "12.3", "12.2", "12.1"]:
+    s = s.replace(f"VERSÃO {old}", "VERSÃO 12.17")
+    s = s.replace(f"Instagram {old}", "Instagram 12.17")
 
-s = s.replace("VERSÃO 12.14 ATIVA", "VERSÃO 12.15 ATIVA")
-s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.15 ATIVA")
+s = s.replace("VERSÃO 12.16 ATIVA", "VERSÃO 12.17 ATIVA")
+s = s.replace("VERSÃO 12.1 ATIVA", "VERSÃO 12.17 ATIVA")
 
 p.write_text(s, encoding="utf-8")
-
-print("Patch Instagram 12.15 aplicado com sucesso (backgroundImageUrl, sem watermark).")
+print("Patch Instagram 12.17 aplicado (cor #FFF3A3 + logs de diagnóstico).")
