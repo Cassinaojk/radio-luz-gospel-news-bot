@@ -905,6 +905,7 @@ def html(article, generated):
         ),
     ]
 
+    paragraphs_html = []
     for paragraph in re.split(
         r"\n+",
         generated["materia"],
@@ -912,9 +913,37 @@ def html(article, generated):
         paragraph = paragraph.strip()
 
         if paragraph:
-            content.append(
+            paragraphs_html.append(
                 f"<p>{paragraph}</p>"
             )
+
+    # Insere a playlist Spotify logo após a imagem e o primeiro parágrafo.
+    spotify_embed = """<!-- Playlist Spotify: Top 2026 Rádio Luz Gospel -->
+<div style="max-width: 600px; margin: 2rem auto; padding: 0 1rem;">
+  <h3 style="text-align: center; color: #1DB954; font-family: Arial, sans-serif; margin-bottom: 1rem;">
+    🎵 Top 2026 — Rádio Luz Gospel
+  </h3>
+  <iframe 
+    style="border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"
+    src="https://open.spotify.com/embed/playlist/14OteRoEl6CVEsTCpYCYyx?utm_source=generator" 
+    width="100%" 
+    height="380" 
+    frameborder="0" 
+    allowfullscreen="" 
+    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" 
+    loading="lazy">
+  </iframe>
+  <p style="text-align: center; margin-top: 0.8rem; font-size: 0.95rem; color: #666; font-family: Arial, sans-serif;">
+    Ouça a seleção especial da <strong>Rádio Luz Gospel</strong> 📻🙏
+  </p>
+</div>"""
+
+    if paragraphs_html:
+        content.append(paragraphs_html[0])
+        content.append(spotify_embed)
+        content.extend(paragraphs_html[1:])
+    else:
+        content.append(spotify_embed)
 
     content.append(
         '<p><small>Fonte: '
