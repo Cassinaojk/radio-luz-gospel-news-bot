@@ -8,7 +8,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 9.3")
-print("VERSÃO 12.1 ATIVA: Instagram com texto amarelo/branco sobre imagem original (sem faixa)")
+print("VERSÃO 12.18 ATIVA: /musicas por conteúdo + Instagram texto amarelo/branco sobre imagem original")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -56,18 +56,21 @@ GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
 # É aplicado antes do Gemini para impedir que notícias políticas, jurídicas,
 # religiosas ou de outros assuntos consumam a cota do modelo.
 MUSIC_STRONG_TERMS = (
-    "cantor", "cantora", "artista", "banda", "dupla", "musico", "musica",
-    "album", "single", "ep", "videoclipe", "clipe", "cancao", "faixa",
-    "gravadora", "compositor", "compositora", "lancamento musical",
-    "lanca single", "lanca album", "lanca musica", "novo single",
-    "novo album", "nova musica", "projeto musical", "carreira musical",
-    "show", "turne", "festival", "concerto", "worship", "louvor",
-    "playlist", "feat", "featuring", "cover musical", "grava seu novo",
+    "lancamento", "lancamento musical", "lancou", "lanca",
+    "novo single", "nova musica", "musica nova", "single",
+    "album", "ep", "videoclipe", "clipe", "cancao", "faixa",
+    "projeto musical", "carreira musical", "gravacao musical",
+    "show", "shows", "turne", "festival", "concerto",
+    "apresentacao musical", "agenda de shows", "palco",
+    "ingressos", "bilheteria", "ao vivo", "feat", "featuring",
+    "playlist", "cover musical", "novo projeto musical",
 )
-MUSIC_GENERIC_TERMS = (
-    "musical", "musicista", "gravacao", "composicao", "composicoes",
-    "instrumental", "vocal", "voz", "palco", "repertorio", "hit",
-    "estreia musical", "producao musical", "produtor musical",
+MUSIC_SUPPORT_TERMS = (
+    "cantor", "cantora", "artista", "banda", "dupla", "musico",
+    "musica", "musical", "musicista", "gravadora", "compositor",
+    "compositora", "composicao", "instrumental", "vocal", "voz",
+    "repertorio", "hit", "producao musical", "produtor musical",
+    "worship", "louvor",
 )
 
 def _music_norm(value):
@@ -75,21 +78,49 @@ def _music_norm(value):
     value = "".join(c for c in value if not unicodedata.combining(c))
     return re.sub(r"\s+", " ", value.lower()).strip()
 
-def is_music_article(article):
-    """Retorna True somente para conteúdo claramente ligado à música."""
-    title = _music_norm(article.get("title", ""))
-    text = _music_norm(article.get("text", ""))[:9000]
+def is_music_related(article=None, generated=None, raw_text=""):
+    """Classifica pelo CONTEUDO, nunca apenas pela fonte.
 
-    # Título claramente musical: aceita imediatamente.
+    Entra em /musicas quando a matéria trata claramente de lançamento,
+    música, show, turnê, festival ou outra atividade musical. Notícias
+    religiosas gerais ficam fora mesmo quando vêm de uma fonte que também
+    publica música.
+    """
+    article = article or {}
+    generated = generated or {}
+
+    parts = [
+        article.get("title", ""),
+        article.get("text", ""),
+        generated.get("titulo", ""),
+        generated.get("resumo", ""),
+        generated.get("materia", ""),
+        raw_text,
+    ]
+    combined = _music_norm(" ".join(str(x or "") for x in parts))
+    title = _music_norm(article.get("title", "") or generated.get("titulo", ""))
+    if not combined:
+        return False
+
+    # Indicadores inequívocos de conteúdo musical.
     if any(term in title for term in MUSIC_STRONG_TERMS):
         return True
 
-    combined = title + " " + text
     strong_hits = sum(1 for term in MUSIC_STRONG_TERMS if term in combined)
-    generic_hits = sum(1 for term in MUSIC_GENERIC_TERMS if term in combined)
+    support_hits = sum(1 for term in MUSIC_SUPPORT_TERMS if term in combined)
 
-    # No corpo, exige sinais suficientes para evitar falsos positivos.
-    return strong_hits >= 2 or (strong_hits >= 1 and generic_hits >= 1)
+    # Uma palavra genérica como "artista" ou "cantora" sozinha não basta.
+    # Exige contexto musical explícito.
+    if strong_hits >= 1 and support_hits >= 1:
+        return True
+    if strong_hits >= 2:
+        return True
+
+    return False
+
+# Compatibilidade com chamadas antigas do código.
+def is_music_article(article):
+    return is_music_related(article=article)
 
 SOURCES = [
     {
@@ -604,10 +635,9 @@ def existing(api):
 
 def update_existing_music_labels(api):
     """
-    Atualiza posts já existentes no Blogger:
-    - fontes News Gospel, UAU Gospel, Folha Gospel e Guiame -> adiciona "Músicas"
-    - Fuxico Gospel -> remove "Músicas", se por acaso existir.
-    Assim, /musicas fica correto para o acervo antigo e para o futuro.
+    Corrige posts já existentes no Blogger usando a classificação pelo conteúdo.
+    Notícias gerais são retiradas de "Músicas"; matérias realmente musicais
+    recebem "Músicas", independentemente da fonte.
     """
     updated = 0
     removed = 0
@@ -631,25 +661,22 @@ def update_existing_music_labels(api):
                 if not post_id:
                     continue
 
-                source_match = re.search(
-                    r'RADIO_LUZ_GOSPEL_SOURCE_URL:\s*(https?://[^\s]+?)\s*-->',
-                    content,
-                    flags=re.I,
-                )
-                source_url = normalize_url(source_match.group(1)) if source_match else ""
-
-                # Sem marcador da fonte, não altera o post.
-                if not source_url:
-                    continue
-
                 labels = list(post.get("labels", []) or [])
-                is_fuxico = "fuxicogospel.com.br" in urlparse(source_url).netloc.lower()
-                should_music = (not is_fuxico) and source_is_music_page(source_url)
+
+                # A decisão é feita pelo conteúdo do post, não pela fonte.
+                # Assim, uma notícia geral do iGospel/News Gospel/UAU etc.
+                # não entra em /musicas só por vir de uma fonte que também
+                # publica matérias musicais.
+                visible_text = BeautifulSoup(content, "html.parser").get_text(" ", strip=True)
+                should_music = is_music_related(
+                    article={"title": post.get("title", ""), "text": visible_text},
+                    raw_text=visible_text,
+                )
 
                 new_labels = labels[:]
                 if should_music and "Músicas" not in new_labels:
                     new_labels.insert(1 if "Notícias" in new_labels else 0, "Músicas")
-                elif is_fuxico and "Músicas" in new_labels:
+                elif not should_music and "Músicas" in new_labels:
                     new_labels = [x for x in new_labels if x != "Músicas"]
 
                 if new_labels != labels:
@@ -661,10 +688,10 @@ def update_existing_music_labels(api):
 
                     if should_music:
                         updated += 1
-                        print(f"✓ /musicas: atualizado post existente — {post.get('title','')}")
-                    elif is_fuxico:
+                        print(f"✓ /musicas: classificado por conteúdo — {post.get('title','')}")
+                    else:
                         removed += 1
-                        print(f"✓ Fuxico removido de /musicas — {post.get('title','')}")
+                        print(f"✓ /musicas: removido por não ser conteúdo musical — {post.get('title','')}")
 
             token = data.get("nextPageToken")
             if not token:
@@ -674,7 +701,7 @@ def update_existing_music_labels(api):
         print("⚠ Não foi possível concluir a atualização dos posts existentes:", e)
 
     print(f"Posts existentes adicionados a /musicas: {updated}")
-    print(f"Posts do Fuxico retirados de /musicas: {removed}")
+    print(f"Posts não musicais retirados de /musicas: {removed}")
 
 
 def is_transient_gemini_error(exc):
@@ -905,7 +932,6 @@ def html(article, generated):
         ),
     ]
 
-    paragraphs_html = []
     for paragraph in re.split(
         r"\n+",
         generated["materia"],
@@ -913,37 +939,9 @@ def html(article, generated):
         paragraph = paragraph.strip()
 
         if paragraph:
-            paragraphs_html.append(
+            content.append(
                 f"<p>{paragraph}</p>"
             )
-
-    # Insere a playlist Spotify logo após a imagem e o primeiro parágrafo.
-    spotify_embed = """<!-- Playlist Spotify: Top 2026 Rádio Luz Gospel -->
-<div style="max-width: 600px; margin: 2rem auto; padding: 0 1rem;">
-  <h3 style="text-align: center; color: #1DB954; font-family: Arial, sans-serif; margin-bottom: 1rem;">
-    🎵 Top 2026 — Rádio Luz Gospel
-  </h3>
-  <iframe 
-    style="border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);"
-    src="https://open.spotify.com/embed/playlist/14OteRoEl6CVEsTCpYCYyx?utm_source=generator" 
-    width="100%" 
-    height="380" 
-    frameborder="0" 
-    allowfullscreen="" 
-    allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" 
-    loading="lazy">
-  </iframe>
-  <p style="text-align: center; margin-top: 0.8rem; font-size: 0.95rem; color: #666; font-family: Arial, sans-serif;">
-    Ouça a seleção especial da <strong>Rádio Luz Gospel</strong> 📻🙏
-  </p>
-</div>"""
-
-    if paragraphs_html:
-        content.append(paragraphs_html[0])
-        content.append(spotify_embed)
-        content.extend(paragraphs_html[1:])
-    else:
-        content.append(spotify_embed)
 
     content.append(
         '<p><small>Fonte: '
@@ -994,7 +992,7 @@ def html(article, generated):
 
 
 def main():
-    print("News Gospel + UAU Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel | /musicas sem Fuxico")
+    print("News Gospel + UAU Gospel + Folha Gospel Música + Guiame Música | /musicas sem Fuxico | Versão 9.4")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls = existing(api)
@@ -1055,9 +1053,9 @@ def main():
         try:
             post_labels = ["Notícias", "Rádio Luz Gospel"]
 
-            # /musicas recebe somente matérias das outras fontes.
-            # Fuxico Gospel fica fora dessa área, tanto agora quanto no futuro.
-            if source_is_music_page(article.get("url", "")):
+            # /musicas depende exclusivamente do conteúdo da matéria.
+            # A fonte nunca é suficiente para classificar uma notícia como música.
+            if is_music_related(article=article, generated=generated):
                 post_labels.insert(1, "Músicas")
 
             response=api.posts().insert(
@@ -1595,6 +1593,9 @@ selfbot.SOURCES = [
         "feeds": [],
         "section_only": True,
         "music_page": True,
+        # IMPORTANTE: a única página usada para descobrir matérias é
+        # https://folhagospel.com/musica/ . Não usa a home nem outras seções.
+        # Os links das matérias podem ter URL própria fora de /musica/.
         "path_prefix": "",
     },
     {
@@ -1604,33 +1605,6 @@ selfbot.SOURCES = [
         "section_only": True,
         "music_page": True,
         "path_prefix": "/musica",
-    },
-    {
-        "nome": "Gospel Mais",
-        "url": "https://gospelmais.com/",
-        "feeds": [
-            "https://gospelmais.com/feed/",
-            "https://gospelmais.com/feed",
-        ],
-        "music_page": False,
-    },
-    {
-        "nome": "Exibir Gospel",
-        "url": "https://exibirgospel.com.br/",
-        "feeds": [
-            "https://exibirgospel.com.br/feed/",
-            "https://exibirgospel.com.br/feed",
-        ],
-        "music_page": False,
-    },
-    {
-        "nome": "iGospel",
-        "url": "https://www.igospel.org.br/",
-        "feeds": [
-            "https://www.igospel.org.br/feed/",
-            "https://www.igospel.org.br/feed",
-        ],
-        "music_page": False,
     },
 ]
 
@@ -1793,37 +1767,44 @@ def _quickchart_band(height=360):
 
 
 def instagram_art_url(post):
-    """Gera obrigatoriamente a arte final do Instagram.
+    """Gera arte 1080x1080 com a imagem original e texto sobreposto.
 
-    Visual obrigatório (versão 12.1):
-    - Imagem original (sem faixa de fundo)
-    - Texto sobreposto diretamente na imagem
-    - Pequeno resumo do título
-    - Primeira frase em amarelo
-    - Restante em branco
-    - Texto em negrito
-    - Máximo de 4 linhas
+    A arte é montada em duas etapas: QuickChart gera apenas a camada de
+    texto transparente e o endpoint de watermark combina essa camada com a
+    imagem original. Não usa ``backgroundImageUrl`` do plugin do QuickChart,
+    que estava retornando HTTP 400 no fluxo anterior.
     """
     from urllib.parse import quote
+
     image_url = social_image_url(post)
-    text = re.sub(r"\s+", " ", (post.get("resumo") or post.get("summary") or post.get("title") or "").strip())
+    text = re.sub(
+        r"\s+", " ",
+        (post.get("title") or post.get("resumo") or post.get("summary") or "").strip(),
+    )
     if not image_url or not text:
         print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
         return None
 
+    print(f"🔍 Instagram debug image_url: {image_url}")
+
     first_lines, remaining_lines = _instagram_text_parts(text, max_lines=4)
-    # Sem faixa: apenas o texto (amarelo + branco) sobre a imagem original.
     overlay_urls = []
     if remaining_lines:
         overlay_urls.append(_quickchart_overlay(remaining_lines, "#FFFFFF"))
     if first_lines:
-        overlay_urls.append(_quickchart_overlay(first_lines, "#FFB51B"))
+        overlay_urls.append(_quickchart_overlay(first_lines, "#FFF3A3"))
 
     result = image_url
     for overlay_url in overlay_urls:
-        result = ("https://quickchart.io/watermark?mainImageUrl=" + quote(result, safe="")
-                  + "&markImageUrl=" + quote(overlay_url, safe="")
-                  + "&markRatio=1&position=bottomMiddle&margin=0")
+        result = (
+            "https://quickchart.io/watermark?mainImageUrl="
+            + quote(result, safe="")
+            + "&markImageUrl="
+            + quote(overlay_url, safe="")
+            + "&markRatio=1&position=bottomMiddle&margin=0"
+        )
+
+    print(f"🔍 Instagram debug final_url: {result[:180]}...")
     return result
 
 def instagram_promote(post, source_name_text):
