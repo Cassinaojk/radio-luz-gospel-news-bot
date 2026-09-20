@@ -1099,7 +1099,7 @@ VERSION = "9.2"
 CURRENT_TZ = ZoneInfo("America/Sao_Paulo")
 TIMEOUT = selfbot.TIMEOUT
 SIMILARITY_MAX = 0.60
-NGRAM_OVERLAP_MAX = 0.08
+NGRAM_OVERLAP_MAX = 0.12
 MIN_COPIED_WORDS = 15
 
 s = requests.Session()
@@ -1457,17 +1457,66 @@ def originality_check(source_text,generated_text):
     return True,"OK"
 
 def gemini(a,client):
+    """
+    Gera a matéria e faz validação de originalidade.
+    Se a primeira versão for rejeitada, solicita uma nova redação com
+    instruções específicas para eliminar trechos literais antes de desistir.
+    """
     if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
+        print("⚠ Gemini: limite de chamadas atingido.")
         return None
 
-    prompt=f"""
+    models=[selfbot.GEMINI_MODEL_TEXT]
+    if selfbot.GEMINI_FALLBACK_MODEL and selfbot.GEMINI_FALLBACK_MODEL not in models:
+        models.append(selfbot.GEMINI_FALLBACK_MODEL)
+
+    # Até duas tentativas de redação por modelo. Mantém o limite global
+    # MAX_GEMINI_TEXT_CALLS_PER_RUN como proteção contra excesso de chamadas.
+    max_attempts = min(2, selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN)
+
+    last_reason="erro"
+
+    for attempt in range(1, max_attempts + 1):
+        if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
+            break
+
+        if attempt == 1:
+            retry_instruction = """
+Esta é a primeira redação. Escreva a matéria do zero, com estrutura
+jornalística própria. Não reproduza frases da fonte.
+"""
+        else:
+            retry_instruction = """
+ATENÇÃO: a versão anterior foi rejeitada pelo verificador de originalidade.
+Faça uma NOVA redação, diferente da anterior. Reorganize completamente a
+ordem das informações, varie a construção das frases e não repita sequências
+de palavras da fonte. Os fatos podem ser os mesmos, mas a redação deve ser
+independente. Não copie frases ou parágrafos.
+"""
+
+        prompt=f"""
 Você é jornalista do Rádio Luz Gospel. Escreva uma matéria NOVA, do zero.
-Não resuma, não traduza e não parafraseie frase por frase. Extraia somente os fatos da fonte e reorganize-os em estrutura jornalística própria.
-Não copie frases ou parágrafos. Não invente fatos. Crie título, resumo e matéria com vocabulário natural em português do Brasil.
-Matéria: aproximadamente 700 a 1200 palavras.
-Retorne SOMENTE JSON válido:
+
+{retry_instruction}
+
+Use SOMENTE os fatos presentes no texto-fonte.
+Não invente nomes, datas, números, locais, declarações ou acontecimentos.
+Não acrescente informações externas.
+Crie título, resumo e matéria com vocabulário natural em português do Brasil.
+A matéria deve ter aproximadamente 700 a 1200 palavras.
+Não diga que foi escrita por IA.
+
+REGRAS:
+- publicar=true somente se o assunto principal for claramente musical;
+- se não for música ou não houver informação suficiente, use publicar=false;
+- título novo e jornalístico;
+- resumo de 2 a 3 frases;
+- não copiar frases ou parágrafos da fonte;
+- não traduzir nem reproduzir a estrutura da matéria original;
+- retornar SOMENTE JSON válido, sem Markdown.
+
+FORMATO:
 {{"publicar":true,"titulo":"...","resumo":"...","materia":"..."}}
-Se não houver informação suficiente, publicar=false.
 
 TÍTULO ORIGINAL (somente referência factual):
 {a['title']}
@@ -1475,58 +1524,94 @@ TÍTULO ORIGINAL (somente referência factual):
 FONTE:
 {a['url']}
 
-TEXTO:
+TEXTO-FONTE:
 {a['text']}
 """
 
-    models=[selfbot.GEMINI_MODEL_TEXT]
-    if selfbot.GEMINI_FALLBACK_MODEL and selfbot.GEMINI_FALLBACK_MODEL not in models:
-        models.append(selfbot.GEMINI_FALLBACK_MODEL)
-
-    last_reason="erro"
-    for index, model in enumerate(models):
-        try:
-            r=selfbot.gemini_request(client,model,prompt)
-            selfbot.gemini_calls += 1
-            raw=(getattr(r,"text",None) or "").strip()
-            raw=re.sub(r"^```(?:json)?\s*|\s*```$","",raw).strip()
-            d=json.loads(raw)
-
-            if d.get("publicar") is False:
-                last_reason="sem informação suficiente"
-                continue
-
-            titulo=str(d.get("titulo","")).strip()
-            resumo=str(d.get("resumo","")).strip()
-            materia=str(d.get("materia","")).strip()
-            if not titulo or not resumo or len(materia)<700:
-                last_reason="resposta inválida"
-                continue
-
-            ok,reason=originality_check(a["text"],titulo+"\n"+resumo+"\n"+materia)
-            if not ok:
-                print("⚠ Gemini: matéria recusada por originalidade")
-                last_reason="originalidade"
-                # Tenta o modelo alternativo sem gerar outro aviso detalhado.
-                continue
-
-            d.update(titulo=titulo,resumo=resumo,materia=materia)
-            print("✓ Gemini: matéria aprovada")
-            return d
-
-        except Exception as e:
-            msg=str(e).upper()
-            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                last_reason="quota"
+        # Primeira tentativa: modelo principal.
+        # Segunda tentativa: se houver modelo alternativo, usa-o; caso contrário
+        # repete o principal com instrução de reescrita.
+        models_this_attempt = models if attempt == 1 else list(reversed(models))
+        for model in models_this_attempt:
+            if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
                 break
-            last_reason="erro"
-            continue
+
+            try:
+                r=selfbot.gemini_request(client,model,prompt)
+                selfbot.gemini_calls += 1
+
+                raw=(getattr(r,"text",None) or "").strip()
+                if not raw:
+                    last_reason="resposta vazia"
+                    print(f"⚠ Gemini {model}: resposta vazia.")
+                    continue
+
+                raw=re.sub(r"^```(?:json)?\s*|\s*```$","",raw).strip()
+                d=json.loads(raw)
+
+                if d.get("publicar") is False:
+                    last_reason="sem informação suficiente"
+                    print(f"⚠ Gemini {model}: marcou a matéria como não publicável.")
+                    continue
+
+                titulo=str(d.get("titulo","")).strip()
+                resumo=str(d.get("resumo","")).strip()
+                materia=str(d.get("materia","")).strip()
+
+                if not titulo or not resumo or len(materia)<700:
+                    last_reason="resposta inválida"
+                    print(f"⚠ Gemini {model}: resposta inválida ou curta demais.")
+                    continue
+
+                ok,reason=originality_check(
+                    a["text"],
+                    titulo+"\n"+resumo+"\n"+materia
+                )
+
+                if not ok:
+                    last_reason="originalidade"
+                    print(
+                        f"⚠ Gemini: matéria recusada por originalidade "
+                        f"({reason}) — tentativa {attempt}/{max_attempts}"
+                    )
+                    # Não publica esta versão. A próxima tentativa recebe
+                    # instrução explícita para reescrever de forma diferente.
+                    continue
+
+                d.update(
+                    titulo=titulo,
+                    resumo=resumo,
+                    materia=materia
+                )
+                print(f"✓ Gemini: matéria aprovada ({model}, tentativa {attempt})")
+                return d
+
+            except Exception as e:
+                msg=str(e).upper()
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    last_reason="quota"
+                    print(f"⚠ Gemini {model}: quota/limite atingido.")
+                    break
+
+                last_reason="erro"
+                print(f"⚠ Gemini {model}: erro na geração: {str(e)[:240]}")
+                continue
+
+        if last_reason == "quota":
+            break
 
     if last_reason == "quota":
         print("⚠ Gemini: quota/limite; restante ficará para a próxima execução")
         selfbot.gemini_quota_hit = True
-    elif last_reason not in ("originalidade", "sem informação suficiente"):
+    elif last_reason == "originalidade":
+        print("⚠ Gemini: todas as tentativas foram recusadas por originalidade")
+    elif last_reason == "sem informação suficiente":
+        print("⚠ Gemini: fonte sem informação suficiente para publicação")
+    elif last_reason == "resposta inválida":
+        print("⚠ Gemini: geração retornou formato inválido")
+    else:
         print("⚠ Gemini: geração não disponível")
+
     return None
 
 
@@ -1692,120 +1777,203 @@ def _instagram_wrap_text(text, max_chars=34, max_lines=4):
     return lines[:max_lines]
 
 
-def _instagram_text_parts(text, max_lines=4):
-    """Separa a primeira frase para amarelo e o restante para branco."""
-    clean = re.sub(r"\s+", " ", str(text or "").strip())
-    if not clean:
-        return [], []
-    # Primeira frase termina em ., !, ? ou :; se não houver, usa a primeira linha.
-    match = re.match(r"(.+?[.!?:])(?:\s+|\( )(.*) \)", clean)
-    if match:
-        first, rest = match.group(1).strip(), match.group(2).strip()
-    else:
-        words = clean.split()
-        first = " ".join(words[:6])
-        rest = " ".join(words[6:])
-    first_lines = _instagram_wrap_text(first, max_chars=34, max_lines=1)
-    remaining_capacity = max(0, max_lines - len(first_lines))
-    rest_lines = _instagram_wrap_text(rest, max_chars=34, max_lines=remaining_capacity)
-    if rest_lines and len(rest_lines) == remaining_capacity and len(rest.split()) > 1:
-        rest_lines[-1] = rest_lines[-1].rstrip(" .") + "..."
-    return first_lines, rest_lines
+def _instagram_extract_summary(post):
+    """Extrai o resumo curto do primeiro parágrafo do post do Blogger."""
+    content = post.get("content", "") or ""
+    m = re.search(
+        r"<p>\s*<strong>(.*?)</strong>\s*</p>",
+        content,
+        flags=re.I | re.S,
+    )
+    if m:
+        return BeautifulSoup(m.group(1), "html.parser").get_text(" ", strip=True)
+    return ""
 
 
-def _quickchart_overlay(lines, color, background="rgba(0,0,0,0)", height=360):
-    """Cria camada PNG transparente com texto grande, branco/amarelo e negrito."""
+def _instagram_wrap_text(text, max_chars=38, max_lines=4):
+    """Quebra texto em no máximo quatro linhas sem inserir o literal \\n."""
+    words = re.sub(r"\s+", " ", str(text or "").strip()).split()
+    lines, current = [], ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and len(candidate) > max_chars:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1].rstrip(" .") + "..."
+    return lines
+
+
+def _quickchart_social_overlay(title, excerpt, width=1080, height=480):
+    """Cria uma única camada PNG transparente para a arte do Instagram.
+
+    A camada contém:
+      - pequeno identificador semitransparente no topo;
+      - título em branco, em negrito, dentro de retângulo azul semitransparente;
+      - trecho da matéria em branco, em negrito, com no máximo quatro linhas.
+
+    Uma única camada é usada para evitar URLs encadeadas no endpoint watermark.
+    """
     from urllib.parse import quote
+
+    title_lines = _instagram_wrap_text(title, max_chars=34, max_lines=2)
+    excerpt_lines = _instagram_wrap_text(excerpt, max_chars=52, max_lines=4)
+
+    # Mantém o texto do trecho em no máximo quatro linhas.
+    if len(excerpt_lines) > 4:
+        excerpt_lines = excerpt_lines[:4]
+
+    # A área azul fica atrás do título. A área inferior recebe o trecho branco.
+    # chartjs-plugin-annotation é pré-instalado no QuickChart.
+    annotations = {
+        "titleBox": {
+            "type": "box",
+            "xMin": 0.04,
+            "xMax": 0.96,
+            "yMin": 0.08,
+            "yMax": 0.46,
+            "backgroundColor": "rgba(0, 86, 179, 0.72)",
+            "borderWidth": 0,
+        },
+        "titleText": {
+            "type": "label",
+            "xValue": 0.50,
+            "yValue": 0.27,
+            "content": title_lines,
+            "backgroundColor": "rgba(0,0,0,0)",
+            "borderWidth": 0,
+            "font": {
+                "size": 30,
+                "weight": "bold",
+            },
+            "color": "#FFFFFF",
+            "padding": 0,
+            "textAlign": "center",
+            "position": "center",
+        },
+        "brand": {
+            "type": "label",
+            "xValue": 0.50,
+            "yValue": 0.04,
+            "content": ["RÁDIO LUZ GOSPEL"],
+            "backgroundColor": "rgba(0, 86, 179, 0.58)",
+            "borderWidth": 0,
+            "font": {
+                "size": 16,
+                "weight": "bold",
+            },
+            "color": "rgba(255,255,255,0.88)",
+            "padding": 5,
+            "position": "center",
+        },
+        "excerptText": {
+            "type": "label",
+            "xValue": 0.50,
+            "yValue": 0.70,
+            "content": excerpt_lines,
+            "backgroundColor": "rgba(0,0,0,0)",
+            "borderWidth": 0,
+            "font": {
+                "size": 24,
+                "weight": "bold",
+            },
+            "color": "#FFFFFF",
+            "padding": 0,
+            "textAlign": "center",
+            "position": "center",
+        },
+    }
+
     config = {
         "type": "bar",
-        "data": {"labels": [""], "datasets": [{"data": [0], "backgroundColor": "rgba(0,0,0,0)", "borderWidth": 0}]},
+        "data": {
+            "labels": [""],
+            "datasets": [{
+                "data": [0],
+                "backgroundColor": "rgba(0,0,0,0)",
+                "borderWidth": 0,
+            }],
+        },
         "options": {
             "responsive": False,
             "animation": False,
             "maintainAspectRatio": False,
             "legend": {"display": False},
-            "layout": {"padding": {"top": 20, "right": 70, "bottom": 20, "left": 70}},
-            "scales": {"xAxes": [{"display": False}], "yAxes": [{"display": False}]},
-            "title": {
-                "display": bool(lines),
-                "position": "top",
-                "text": lines,
-                "fontSize": 30,
-                "fontStyle": "bold",
-                "fontColor": color,
-                "padding": 8,
-            },
-        },
-    }
-    config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
-    return ("https://quickchart.io/chart?width=1080&height=" + str(height)
-            + "&devicePixelRatio=1&format=png&version=2.9.4"
-            + "&backgroundColor=" + quote(background, safe="")
-            + "&c=" + quote(config_json, safe=""))
-
-
-def _quickchart_band(height=360):
-    """Camada preta semitransparente, transparente fora da faixa."""
-    from urllib.parse import quote
-    config = {
-        "type": "bar",
-        "data": {"labels": [""], "datasets": [{"data": [100], "backgroundColor": "rgba(0,0,0,0.72)", "borderWidth": 0}]},
-        "options": {
-            "responsive": False, "animation": False, "maintainAspectRatio": False,
-            "legend": {"display": False},
             "layout": {"padding": 0},
             "scales": {
-                "xAxes": [{"display": False, "gridLines": {"display": False}, "stacked": True}],
-                "yAxes": [{"display": False, "gridLines": {"display": False}, "stacked": True, "ticks": {"min": 0, "max": 100}}],
+                "xAxes": [{
+                    "display": False,
+                    "ticks": {"display": False},
+                    "gridLines": {"display": False},
+                }],
+                "yAxes": [{
+                    "display": False,
+                    "ticks": {"display": False, "min": 0, "max": 1},
+                    "gridLines": {"display": False},
+                }],
+            },
+            "plugins": {
+                "annotation": {
+                    "annotations": annotations,
+                },
             },
         },
     }
+
     config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
-    return ("https://quickchart.io/chart?width=1080&height=" + str(height)
-            + "&devicePixelRatio=1&format=png&version=2.9.4"
-            + "&backgroundColor=rgba(0,0,0,0)&c=" + quote(config_json, safe=""))
+    return (
+        "https://quickchart.io/chart?width=" + str(width)
+        + "&height=" + str(height)
+        + "&devicePixelRatio=1&format=png&version=2.9.4"
+        + "&backgroundColor=rgba(0,0,0,0)"
+        + "&c=" + quote(config_json, safe="")
+    )
 
 
 def instagram_art_url(post):
-    """Gera arte 1080x1080 com a imagem original e texto sobreposto.
+    """Gera a arte obrigatória do Instagram sem alterar/cortar a foto original.
 
-    A arte é montada em duas etapas: QuickChart gera apenas a camada de
-    texto transparente e o endpoint de watermark combina essa camada com a
-    imagem original. Não usa ``backgroundImageUrl`` do plugin do QuickChart,
-    que estava retornando HTTP 400 no fluxo anterior.
+    A foto original continua sendo a imagem principal. O QuickChart gera
+    somente uma camada transparente e o Watermark API faz uma única composição.
     """
     from urllib.parse import quote
 
     image_url = social_image_url(post)
-    text = re.sub(
-        r"\s+", " ",
-        (post.get("title") or post.get("resumo") or post.get("summary") or "").strip(),
+    title = re.sub(
+        r"\s+",
+        " ",
+        str(post.get("title") or "").strip(),
     )
-    if not image_url or not text:
-        print("⚠ Instagram: imagem ou texto ausente; publicação cancelada.")
+    excerpt = _instagram_extract_summary(post)
+    if not excerpt:
+        excerpt = title
+
+    if not image_url or not title:
+        print("⚠ Instagram: imagem original ou título ausente; arte não pode ser gerada.")
         return None
 
     print(f"🔍 Instagram debug image_url: {image_url}")
 
-    first_lines, remaining_lines = _instagram_text_parts(text, max_lines=4)
-    overlay_urls = []
-    if remaining_lines:
-        overlay_urls.append(_quickchart_overlay(remaining_lines, "#FFFFFF"))
-    if first_lines:
-        overlay_urls.append(_quickchart_overlay(first_lines, "#FFF3A3"))
+    overlay_url = _quickchart_social_overlay(title, excerpt)
 
-    result = image_url
-    for overlay_url in overlay_urls:
-        result = (
-            "https://quickchart.io/watermark?mainImageUrl="
-            + quote(result, safe="")
-            + "&markImageUrl="
-            + quote(overlay_url, safe="")
-            + "&markRatio=1&position=bottomMiddle&margin=0"
-        )
+    # UMA única composição. Não encadeia watermark sobre watermark.
+    result = (
+        "https://quickchart.io/watermark?mainImageUrl="
+        + quote(image_url, safe="")
+        + "&markImageUrl="
+        + quote(overlay_url, safe="")
+        + "&markRatio=1&position=bottomMiddle&margin=0"
+    )
 
-    print(f"🔍 Instagram debug final_url: {result[:180]}...")
+    print(f"🔍 Instagram debug final_url: {result[:220]}...")
     return result
+
 
 def instagram_promote(post, source_name_text):
     if not INSTAGRAM_ENABLED:
@@ -1817,8 +1985,7 @@ def instagram_promote(post, source_name_text):
     image_url = instagram_art_url(post)
     url = promotion_url(post.get("url", ""))
     if not original_image_url or not image_url or not url:
-        print("⚠ Instagram: arte obrigatória não disponível; imagem original não será publicada.")
-        print("⚠ Divulgação: Instagram sem imagem pública ou URL da matéria.")
+        print("⚠ Instagram: arte obrigatória não disponível; publicação cancelada para preservar a regra visual.")
         return False
     caption = (
         "📰 RÁDIO LUZ GOSPEL\n\n"
@@ -1830,21 +1997,26 @@ def instagram_promote(post, source_name_text):
 
     # Esta é a autenticação do Instagram que já foi validada no robô.
     base = f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/me"
-    used_art = image_url != original_image_url
+    used_art = True
     try:
-        if used_art:
-            try:
-                check = requests.get(image_url, stream=True, timeout=25)
-                content_type = (check.headers.get("Content-Type") or "").lower()
-                check.close()
-                if check.status_code != 200 or not content_type.startswith("image/"):
-                    print(f"⚠ Divulgação: arte automática não retornou imagem ({check.status_code}, {content_type}); usando imagem original.")
-                    image_url = original_image_url
-                    used_art = False
-            except Exception as art_error:
-                print(f"⚠ Divulgação: não foi possível validar a arte automática ({art_error}); usando imagem original.")
-                image_url = original_image_url
-                used_art = False
+        # A arte é obrigatória. Se o QuickChart/Watermark devolver qualquer
+        # erro, NÃO publica a imagem original como fallback.
+        try:
+            check = requests.get(image_url, stream=True, timeout=25)
+            content_type = (check.headers.get("Content-Type") or "").lower()
+            status_code = check.status_code
+            quickchart_error = check.headers.get("X-quickchart-error", "")
+            check.close()
+            if status_code != 200 or not content_type.startswith("image/"):
+                print(
+                    "⚠ Divulgação: arte automática inválida "
+                    f"({status_code}, {content_type}). "
+                    f"{quickchart_error[:240]}"
+                )
+                return False
+        except Exception as art_error:
+            print(f"⚠ Divulgação: não foi possível validar a arte automática: {art_error}")
+            return False
 
         create = requests.post(
             f"{base}/media",
@@ -1902,7 +2074,7 @@ def instagram_promote(post, source_name_text):
             timeout=TIMEOUT,
         )
         if publish.ok:
-            print("✓ Divulgação: publicada no Instagram com arte + título" if used_art else "✓ Divulgação: publicada no Instagram com imagem original (arte indisponível)")
+            print("✓ Divulgação: publicada no Instagram com a arte obrigatória (imagem original + título + trecho + identificação)")
             return True
         print(f"⚠ Divulgação: Instagram publicação HTTP {publish.status_code}: {publish.text[:300]}")
     except Exception as e:
@@ -1994,5 +2166,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 12.1 ATIVA: Instagram texto amarelo/branco sobre imagem original (sem faixa) | Facebook + Telegram preservados")
+print("VERSÃO 12.20 ATIVA: arte Instagram obrigatória — imagem original preservada + título em retângulo azul semitransparente + trecho branco em negrito (até 4 linhas) + identificação superior | Facebook + Telegram preservados")
 selfbot.main()
