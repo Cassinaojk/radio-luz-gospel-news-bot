@@ -1,4 +1,4 @@
-import os, re, json, requests, time, random, io, contextlib, unicodedata
+import os, re, json, requests, time, random, io, contextlib, unicodedata, warnings
 import builtins
 
 # Log resumido por padrão. Use VERBOSE_LOG=true no GitHub Actions para diagnóstico.
@@ -35,7 +35,9 @@ def print(*args, **kwargs):
     if important:
         return _original_print(*args, **kwargs)
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+
+warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
 from urllib.parse import urlparse, urljoin
@@ -43,7 +45,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.24")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.25")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -265,6 +267,7 @@ s.headers.update({
 
 gemini_calls = 0
 gemini_quota_hit = False
+_ai_config_logged = False
 
 
 def normalize_url(u):
@@ -653,7 +656,7 @@ def blogger():
     )
 
 
-def existing(api):
+def existing(api, show_log=True):
     """
     Retorna:
       - blog_urls: URLs dos posts do próprio Blogger
@@ -713,8 +716,9 @@ def existing(api):
     except Exception as e:
         print("Erro ao consultar Blogger:", e)
 
-    print("Posts existentes no Blogger:", len(blog_urls))
-    print("Fontes já registradas:", len(source_urls))
+    if show_log:
+        print("Posts existentes no Blogger:", len(blog_urls))
+        print("Fontes já registradas:", len(source_urls))
 
     return blog_urls, source_urls
 
@@ -968,19 +972,21 @@ def _is_quota_exception(exc):
 
 
 def gemini(article, client=None):
-    global gemini_calls, gemini_quota_hit
+    global gemini_calls, gemini_quota_hit, _ai_config_logged
     if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
         print("⚠ IA: limite de chamadas desta execução atingido.")
         return None
 
     providers = _build_ai_providers()
-    print(
-        "IA configurada: "
-        f"Gemini={'SIM' if GEMINI_API_KEY else 'NÃO'} | "
-        f"Gemini-2={'SIM' if GEMINI_API_KEY_2 else 'NÃO'} | "
-        f"Groq={'SIM' if GROQ_API_KEY else 'NÃO'} | "
-        f"Mistral={'SIM' if MISTRAL_API_KEY else 'NÃO'}"
-    )
+    if not _ai_config_logged:
+        print(
+            "IA: "
+            f"Gemini={'SIM' if GEMINI_API_KEY else 'NÃO'} | "
+            f"Gemini-2={'SIM' if GEMINI_API_KEY_2 else 'NÃO'} | "
+            f"Groq={'SIM' if GROQ_API_KEY else 'NÃO'} | "
+            f"Mistral={'SIM' if MISTRAL_API_KEY else 'NÃO'}"
+        )
+        _ai_config_logged = True
     if not providers:
         print("⚠ IA: nenhuma chave configurada.")
         return None
@@ -1204,7 +1210,11 @@ def main():
                 continue
             article=get_article(normalized)
             if article:
-                # A classificação em /musicas é feita pelo conteúdo da matéria.
+                # Filtro editorial ANTES da IA: somente matérias claramente
+                # musicais são enviadas ao Gemini/provedores. Isso economiza
+                # cota e impede que notícias gerais consumam chamadas.
+                if not is_music_related(article=article):
+                    continue
                 candidate_urls.add(normalized)
                 candidates.append(article)
 
@@ -1214,7 +1224,7 @@ def main():
     print(f"Fontes encontradas: {source_summary}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
-    print(f"Novas matérias: {len(candidates)}")
+    print(f"Novas matérias musicais: {len(candidates)}")
 
     published=0
     failed=0
@@ -1692,7 +1702,7 @@ def promote_new_posts(before_urls):
         return
     try:
         api_after = blogger()
-        after_urls, _ = existing(api_after)
+        after_urls, _ = existing(api_after, show_log=False)
         new_urls = list(after_urls - before_urls)
         if not new_urls:
             print("Divulgação: nenhuma publicação nova nesta execução.")
@@ -1720,12 +1730,12 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.24 ATIVA: arquivo único | log resumido | /musicas por conteúdo | Instagram/Facebook/Telegram preservados")
+print("VERSÃO 12.25 ATIVA: filtro musical antes da IA | log resumido | /musicas por conteúdo | Instagram/Facebook/Telegram preservados")
 
 _before_urls = set()
 if PROMO_ENABLED:
     try:
-        _before_urls, _ = existing(blogger())
+        _before_urls, _ = existing(blogger(), show_log=False)
     except Exception as exc:
         print("⚠ Divulgação: não foi possível capturar o estado anterior do Blogger:", exc)
 
