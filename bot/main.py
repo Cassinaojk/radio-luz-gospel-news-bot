@@ -982,21 +982,37 @@ TEXTO-FONTE:
 
     exhausted = set()
     last_reason = "erro"
-    # Até duas rodadas; cada rodada percorre a cadeia uma vez.
+    originality_retry = set()
+
+    # Cada provedor recebe uma tentativa normal. Uma segunda redação só é
+    # feita quando a primeira foi rejeitada especificamente por originalidade.
+    # Isso evita gastar duas chamadas com a mesma matéria quando a IA apenas
+    # declarou que a fonte não é suficiente.
     for pass_index in range(2):
+        if pass_index == 1 and not originality_retry:
+            break
+
         pass_prompt = prompt if pass_index == 0 else prompt + """
 
-ATENÇÃO: a versão anterior foi rejeitada por originalidade. Faça uma nova
-redação, reorganizando completamente a ordem das informações e variando as
-construções das frases. Não repita sequências da fonte.
+ATENÇÃO: a versão anterior deste mesmo provedor foi rejeitada no teste de
+originalidade. Gere uma redação realmente nova, reorganizando completamente
+a ordem das informações, usando construções diferentes e evitando qualquer
+sequência literal longa da fonte. Preserve somente os fatos verificáveis.
 """
         for provider, api_key, model in providers:
             if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
                 break
             if provider in exhausted:
                 continue
+            if pass_index == 1 and provider not in originality_retry:
+                continue
+
             try:
-                print(f"IA: tentando {provider} / {model}...")
+                if pass_index == 0:
+                    print(f"IA: tentando {provider} / {model}...")
+                else:
+                    print(f"IA: nova redação por originalidade — {provider} / {model}...")
+
                 response = _provider_request(provider, api_key, model, pass_prompt)
                 gemini_calls += 1
                 raw = _provider_text(provider, response)
@@ -1004,31 +1020,61 @@ construções das frases. Não repita sequências da fonte.
                     last_reason = "resposta vazia"
                     print(f"⚠ {provider}: resposta vazia.")
                     continue
+
                 raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
                 data = json.loads(raw)
+
                 if data.get("publicar") is False:
                     last_reason = "sem informação suficiente"
-                    print(f"⚠ {provider}: marcou a matéria como não publicável; tentando próximo provedor.")
+                    print(
+                        f"⚠ {provider}: marcou a matéria como não publicável; "
+                        "matéria será ignorada nesta rodada."
+                    )
+                    # Não repete a mesma solicitação: a resposta foi editorial,
+                    # não um erro transitório.
                     continue
+
                 titulo = str(data.get("titulo", "")).strip()
                 resumo = str(data.get("resumo", "")).strip()
                 materia = str(data.get("materia", "")).strip()
+
                 if not titulo or not resumo or len(materia) < 700:
                     last_reason = "resposta inválida"
                     print(f"⚠ {provider}: resposta inválida ou curta demais.")
                     continue
-                ok, reason = originality_check(article["text"], titulo + "\n" + resumo + "\n" + materia)
+
+                ok, reason = originality_check(
+                    article["text"],
+                    titulo + "\n" + resumo + "\n" + materia,
+                )
                 if not ok:
                     last_reason = "originalidade"
-                    print(f"⚠ {provider}: matéria recusada por originalidade ({reason}) — tentando outra IA.")
+                    originality_retry.add(provider)
+                    print(
+                        f"⚠ {provider}: matéria recusada por originalidade "
+                        f"({reason}) — será feita uma nova redação."
+                    )
                     continue
-                print(f"✓ IA: matéria aprovada ({provider} / {model}, tentativa {pass_index + 1})")
-                return {"publicar": True, "titulo": titulo, "resumo": resumo, "materia": materia}
+
+                print(
+                    f"✓ IA: matéria aprovada ({provider} / {model}, "
+                    f"tentativa {pass_index + 1})"
+                )
+                return {
+                    "publicar": True,
+                    "titulo": titulo,
+                    "resumo": resumo,
+                    "materia": materia,
+                }
+
             except Exception as exc:
                 if _is_quota_exception(exc):
                     exhausted.add(provider)
                     last_reason = "quota"
-                    print(f"⚠ {provider}: quota/limite atingido — passando para o próximo provedor.")
+                    print(
+                        f"⚠ {provider}: quota/limite atingido — "
+                        "passando para o próximo provedor."
+                    )
                 else:
                     last_reason = "erro"
                     print(f"⚠ {provider}: erro na geração: {str(exc)[:240]}")
@@ -1037,7 +1083,7 @@ construções das frases. Não repita sequências da fonte.
         gemini_quota_hit = True
         print("⚠ IA: provedores disponíveis atingiram quota/limite; restante ficará para a próxima execução")
     elif last_reason == "originalidade":
-        print("⚠ IA: todas as tentativas foram recusadas por originalidade")
+        print("⚠ IA: todas as redações foram recusadas por originalidade")
     elif last_reason == "sem informação suficiente":
         print("⚠ IA: provedores não consideraram a fonte suficiente para publicação")
     elif last_reason == "resposta inválida":
