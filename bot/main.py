@@ -45,7 +45,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.25")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.26")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -1127,24 +1127,38 @@ def html(article, generated):
         ),
     ]
 
-    for paragraph in re.split(
-        r"\n+",
-        generated["materia"],
-    ):
-        paragraph = paragraph.strip()
-
-        if paragraph:
-            content.append(
-                f"<p>{paragraph}</p>"
-            )
-
-    content.append(
-        '<p><small>Fonte: '
-        f'<a href="{safe_source_url}" '
-        'target="_blank" rel="noopener">'
-        f"{safe_source_title}"
-        "</a></small></p>"
+    # Insere a playlist do Spotify depois do segundo parágrafo da matéria.
+    spotify_block = (
+        '<div style="max-width:600px;margin:2rem auto;padding:0 1rem;">'
+        '<h3 style="text-align:center;color:#1DB954;font-family:Arial,sans-serif;margin-bottom:1rem;">'
+        '🎵 Top 2026 — Rádio Luz Gospel'
+        '</h3>'
+        '<iframe '
+        'style="border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.15);" '
+        'src="https://open.spotify.com/embed/playlist/14OteRoEl6CVEsTCpYCYyx?utm_source=generator" '
+        'width="100%" height="380" frameborder="0" allowfullscreen="" '
+        'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
+        'loading="lazy"></iframe>'
+        '<p style="text-align:center;margin-top:0.8rem;font-size:0.95rem;color:#666;font-family:Arial,sans-serif;">'
+        'Ouça a seleção especial da <strong>Rádio Luz Gospel</strong> 📻🙏'
+        '</p>'
+        '</div>'
     )
+
+    article_paragraphs = []
+    for paragraph in re.split(r"\n+", generated["materia"]):
+        paragraph = paragraph.strip()
+        if paragraph:
+            article_paragraphs.append(paragraph)
+
+    for index, paragraph in enumerate(article_paragraphs):
+        content.append(f"<p>{paragraph}</p>")
+        # A playlist entra imediatamente após o segundo parágrafo.
+        if index == 1:
+            content.append(spotify_block)
+
+    # A URL da fonte continua somente no comentário HTML invisível.
+    # Isso preserva a deduplicação sem exibir "Fonte:" ou link no final do post.
 
     # Chamada para ação: convida leitores do Blogger a entrar
     # voluntariamente no canal oficial do Telegram.
@@ -1730,7 +1744,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.25 ATIVA: filtro musical antes da IA | log resumido | /musicas por conteúdo | Instagram/Facebook/Telegram preservados")
+print("VERSÃO 12.26 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram preservados")
 
 _before_urls = set()
 if PROMO_ENABLED:
