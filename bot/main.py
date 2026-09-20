@@ -1,4 +1,40 @@
 import os, re, json, requests, time, random, io, contextlib, unicodedata
+import builtins
+
+# Log resumido por padrão. Use VERBOSE_LOG=true no GitHub Actions para diagnóstico.
+_VERBOSE_LOG = os.getenv("VERBOSE_LOG", "false").lower() in ("1", "true", "yes", "sim")
+_original_print = builtins.print
+
+def print(*args, **kwargs):
+    if _VERBOSE_LOG:
+        return _original_print(*args, **kwargs)
+
+    message = " ".join(str(a) for a in args).strip()
+    important = (
+        message.startswith("RÁDIO LUZ GOSPEL - ROBÔ")
+        or message.startswith("VERSÃO ")
+        or message.startswith("Fontes:")
+        or message.startswith("Posts existentes no Blogger:")
+        or message.startswith("Fontes já registradas:")
+        or message.startswith("Fontes encontradas:")
+        or message.startswith("Novas matérias:")
+        or message == "RESULTADO"
+        or message.startswith("Publicações:")
+        or message.startswith("Ignoradas:")
+        or message.startswith("Falhas:")
+        or message.startswith("✓ Publicada:")
+        or message.startswith("⚠ Blogger:")
+        or message.startswith("⚠ IA:")
+        or message.startswith("⚠ Gemini:")
+        or message.startswith("⚠ Divulgação:")
+        or message.startswith("⚠ Instagram:")
+        or message.startswith("⚠ Não foi possível")
+        or message.startswith("Erro ao consultar Blogger:")
+        or message.startswith("Erro:")
+    )
+    if important:
+        return _original_print(*args, **kwargs)
+
 from bs4 import BeautifulSoup
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
@@ -7,7 +43,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.22")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.24")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -982,37 +1018,21 @@ TEXTO-FONTE:
 
     exhausted = set()
     last_reason = "erro"
-    originality_retry = set()
-
-    # Cada provedor recebe uma tentativa normal. Uma segunda redação só é
-    # feita quando a primeira foi rejeitada especificamente por originalidade.
-    # Isso evita gastar duas chamadas com a mesma matéria quando a IA apenas
-    # declarou que a fonte não é suficiente.
+    # Até duas rodadas; cada rodada percorre a cadeia uma vez.
     for pass_index in range(2):
-        if pass_index == 1 and not originality_retry:
-            break
-
         pass_prompt = prompt if pass_index == 0 else prompt + """
 
-ATENÇÃO: a versão anterior deste mesmo provedor foi rejeitada no teste de
-originalidade. Gere uma redação realmente nova, reorganizando completamente
-a ordem das informações, usando construções diferentes e evitando qualquer
-sequência literal longa da fonte. Preserve somente os fatos verificáveis.
+ATENÇÃO: a versão anterior foi rejeitada por originalidade. Faça uma nova
+redação, reorganizando completamente a ordem das informações e variando as
+construções das frases. Não repita sequências da fonte.
 """
         for provider, api_key, model in providers:
             if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
                 break
             if provider in exhausted:
                 continue
-            if pass_index == 1 and provider not in originality_retry:
-                continue
-
             try:
-                if pass_index == 0:
-                    print(f"IA: tentando {provider} / {model}...")
-                else:
-                    print(f"IA: nova redação por originalidade — {provider} / {model}...")
-
+                print(f"IA: tentando {provider} / {model}...")
                 response = _provider_request(provider, api_key, model, pass_prompt)
                 gemini_calls += 1
                 raw = _provider_text(provider, response)
@@ -1020,61 +1040,31 @@ sequência literal longa da fonte. Preserve somente os fatos verificáveis.
                     last_reason = "resposta vazia"
                     print(f"⚠ {provider}: resposta vazia.")
                     continue
-
                 raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
                 data = json.loads(raw)
-
                 if data.get("publicar") is False:
                     last_reason = "sem informação suficiente"
-                    print(
-                        f"⚠ {provider}: marcou a matéria como não publicável; "
-                        "matéria será ignorada nesta rodada."
-                    )
-                    # Não repete a mesma solicitação: a resposta foi editorial,
-                    # não um erro transitório.
+                    print(f"⚠ {provider}: marcou a matéria como não publicável; tentando próximo provedor.")
                     continue
-
                 titulo = str(data.get("titulo", "")).strip()
                 resumo = str(data.get("resumo", "")).strip()
                 materia = str(data.get("materia", "")).strip()
-
                 if not titulo or not resumo or len(materia) < 700:
                     last_reason = "resposta inválida"
                     print(f"⚠ {provider}: resposta inválida ou curta demais.")
                     continue
-
-                ok, reason = originality_check(
-                    article["text"],
-                    titulo + "\n" + resumo + "\n" + materia,
-                )
+                ok, reason = originality_check(article["text"], titulo + "\n" + resumo + "\n" + materia)
                 if not ok:
                     last_reason = "originalidade"
-                    originality_retry.add(provider)
-                    print(
-                        f"⚠ {provider}: matéria recusada por originalidade "
-                        f"({reason}) — será feita uma nova redação."
-                    )
+                    print(f"⚠ {provider}: matéria recusada por originalidade ({reason}) — tentando outra IA.")
                     continue
-
-                print(
-                    f"✓ IA: matéria aprovada ({provider} / {model}, "
-                    f"tentativa {pass_index + 1})"
-                )
-                return {
-                    "publicar": True,
-                    "titulo": titulo,
-                    "resumo": resumo,
-                    "materia": materia,
-                }
-
+                print(f"✓ IA: matéria aprovada ({provider} / {model}, tentativa {pass_index + 1})")
+                return {"publicar": True, "titulo": titulo, "resumo": resumo, "materia": materia}
             except Exception as exc:
                 if _is_quota_exception(exc):
                     exhausted.add(provider)
                     last_reason = "quota"
-                    print(
-                        f"⚠ {provider}: quota/limite atingido — "
-                        "passando para o próximo provedor."
-                    )
+                    print(f"⚠ {provider}: quota/limite atingido — passando para o próximo provedor.")
                 else:
                     last_reason = "erro"
                     print(f"⚠ {provider}: erro na geração: {str(exc)[:240]}")
@@ -1083,7 +1073,7 @@ sequência literal longa da fonte. Preserve somente os fatos verificáveis.
         gemini_quota_hit = True
         print("⚠ IA: provedores disponíveis atingiram quota/limite; restante ficará para a próxima execução")
     elif last_reason == "originalidade":
-        print("⚠ IA: todas as redações foram recusadas por originalidade")
+        print("⚠ IA: todas as tentativas foram recusadas por originalidade")
     elif last_reason == "sem informação suficiente":
         print("⚠ IA: provedores não consideraram a fonte suficiente para publicação")
     elif last_reason == "resposta inválida":
@@ -1214,15 +1204,14 @@ def main():
                 continue
             article=get_article(normalized)
             if article:
-                # Todas as matérias das fontes são elegíveis para publicação.
-                # A classificação em /musicas é feita exclusivamente pelos
-                # marcadores da fonte: Fuxico Gospel nunca entra em /musicas;
-                # News Gospel, UAU Gospel, Folha Gospel e Guiame entram.
+                # A classificação em /musicas é feita pelo conteúdo da matéria.
                 candidate_urls.add(normalized)
                 candidates.append(article)
 
-    for name,count in source_counts.items():
-        print(f"{name}: {count} encontradas")
+    source_summary = " | ".join(
+        f"{name}: {count}" for name, count in source_counts.items()
+    )
+    print(f"Fontes encontradas: {source_summary}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
     print(f"Novas matérias: {len(candidates)}")
@@ -1242,7 +1231,6 @@ def main():
             print("⚠ Gemini: limite desta execução atingido; restante ficará para a próxima execução")
             break
 
-        print("Gemini: gerando matéria...")
         generated=gemini(article,gemini_client)
         if not generated:
             ignored += 1
@@ -1732,7 +1720,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.23 ATIVA: arquivo único consolidado | Gemini → Gemini-2 → Groq → Mistral | /musicas por conteúdo | Instagram/Facebook/Telegram preservados | Instagram sem patch externo")
+print("VERSÃO 12.24 ATIVA: arquivo único | log resumido | /musicas por conteúdo | Instagram/Facebook/Telegram preservados")
 
 _before_urls = set()
 if PROMO_ENABLED:
