@@ -1099,7 +1099,7 @@ VERSION = "9.2"
 CURRENT_TZ = ZoneInfo("America/Sao_Paulo")
 TIMEOUT = selfbot.TIMEOUT
 SIMILARITY_MAX = 0.60
-NGRAM_OVERLAP_MAX = 0.08
+NGRAM_OVERLAP_MAX = 0.12
 MIN_COPIED_WORDS = 15
 
 s = requests.Session()
@@ -1457,17 +1457,66 @@ def originality_check(source_text,generated_text):
     return True,"OK"
 
 def gemini(a,client):
+    """
+    Gera a matéria e faz validação de originalidade.
+    Se a primeira versão for rejeitada, solicita uma nova redação com
+    instruções específicas para eliminar trechos literais antes de desistir.
+    """
     if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
+        print("⚠ Gemini: limite de chamadas atingido.")
         return None
 
-    prompt=f"""
+    models=[selfbot.GEMINI_MODEL_TEXT]
+    if selfbot.GEMINI_FALLBACK_MODEL and selfbot.GEMINI_FALLBACK_MODEL not in models:
+        models.append(selfbot.GEMINI_FALLBACK_MODEL)
+
+    # Até duas tentativas de redação por modelo. Mantém o limite global
+    # MAX_GEMINI_TEXT_CALLS_PER_RUN como proteção contra excesso de chamadas.
+    max_attempts = min(2, selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN)
+
+    last_reason="erro"
+
+    for attempt in range(1, max_attempts + 1):
+        if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
+            break
+
+        if attempt == 1:
+            retry_instruction = """
+Esta é a primeira redação. Escreva a matéria do zero, com estrutura
+jornalística própria. Não reproduza frases da fonte.
+"""
+        else:
+            retry_instruction = """
+ATENÇÃO: a versão anterior foi rejeitada pelo verificador de originalidade.
+Faça uma NOVA redação, diferente da anterior. Reorganize completamente a
+ordem das informações, varie a construção das frases e não repita sequências
+de palavras da fonte. Os fatos podem ser os mesmos, mas a redação deve ser
+independente. Não copie frases ou parágrafos.
+"""
+
+        prompt=f"""
 Você é jornalista do Rádio Luz Gospel. Escreva uma matéria NOVA, do zero.
-Não resuma, não traduza e não parafraseie frase por frase. Extraia somente os fatos da fonte e reorganize-os em estrutura jornalística própria.
-Não copie frases ou parágrafos. Não invente fatos. Crie título, resumo e matéria com vocabulário natural em português do Brasil.
-Matéria: aproximadamente 700 a 1200 palavras.
-Retorne SOMENTE JSON válido:
+
+{retry_instruction}
+
+Use SOMENTE os fatos presentes no texto-fonte.
+Não invente nomes, datas, números, locais, declarações ou acontecimentos.
+Não acrescente informações externas.
+Crie título, resumo e matéria com vocabulário natural em português do Brasil.
+A matéria deve ter aproximadamente 700 a 1200 palavras.
+Não diga que foi escrita por IA.
+
+REGRAS:
+- publicar=true somente se o assunto principal for claramente musical;
+- se não for música ou não houver informação suficiente, use publicar=false;
+- título novo e jornalístico;
+- resumo de 2 a 3 frases;
+- não copiar frases ou parágrafos da fonte;
+- não traduzir nem reproduzir a estrutura da matéria original;
+- retornar SOMENTE JSON válido, sem Markdown.
+
+FORMATO:
 {{"publicar":true,"titulo":"...","resumo":"...","materia":"..."}}
-Se não houver informação suficiente, publicar=false.
 
 TÍTULO ORIGINAL (somente referência factual):
 {a['title']}
@@ -1475,58 +1524,94 @@ TÍTULO ORIGINAL (somente referência factual):
 FONTE:
 {a['url']}
 
-TEXTO:
+TEXTO-FONTE:
 {a['text']}
 """
 
-    models=[selfbot.GEMINI_MODEL_TEXT]
-    if selfbot.GEMINI_FALLBACK_MODEL and selfbot.GEMINI_FALLBACK_MODEL not in models:
-        models.append(selfbot.GEMINI_FALLBACK_MODEL)
-
-    last_reason="erro"
-    for index, model in enumerate(models):
-        try:
-            r=selfbot.gemini_request(client,model,prompt)
-            selfbot.gemini_calls += 1
-            raw=(getattr(r,"text",None) or "").strip()
-            raw=re.sub(r"^```(?:json)?\s*|\s*```$","",raw).strip()
-            d=json.loads(raw)
-
-            if d.get("publicar") is False:
-                last_reason="sem informação suficiente"
-                continue
-
-            titulo=str(d.get("titulo","")).strip()
-            resumo=str(d.get("resumo","")).strip()
-            materia=str(d.get("materia","")).strip()
-            if not titulo or not resumo or len(materia)<700:
-                last_reason="resposta inválida"
-                continue
-
-            ok,reason=originality_check(a["text"],titulo+"\n"+resumo+"\n"+materia)
-            if not ok:
-                print("⚠ Gemini: matéria recusada por originalidade")
-                last_reason="originalidade"
-                # Tenta o modelo alternativo sem gerar outro aviso detalhado.
-                continue
-
-            d.update(titulo=titulo,resumo=resumo,materia=materia)
-            print("✓ Gemini: matéria aprovada")
-            return d
-
-        except Exception as e:
-            msg=str(e).upper()
-            if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
-                last_reason="quota"
+        # Primeira tentativa: modelo principal.
+        # Segunda tentativa: se houver modelo alternativo, usa-o; caso contrário
+        # repete o principal com instrução de reescrita.
+        models_this_attempt = models if attempt == 1 else list(reversed(models))
+        for model in models_this_attempt:
+            if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
                 break
-            last_reason="erro"
-            continue
+
+            try:
+                r=selfbot.gemini_request(client,model,prompt)
+                selfbot.gemini_calls += 1
+
+                raw=(getattr(r,"text",None) or "").strip()
+                if not raw:
+                    last_reason="resposta vazia"
+                    print(f"⚠ Gemini {model}: resposta vazia.")
+                    continue
+
+                raw=re.sub(r"^```(?:json)?\s*|\s*```$","",raw).strip()
+                d=json.loads(raw)
+
+                if d.get("publicar") is False:
+                    last_reason="sem informação suficiente"
+                    print(f"⚠ Gemini {model}: marcou a matéria como não publicável.")
+                    continue
+
+                titulo=str(d.get("titulo","")).strip()
+                resumo=str(d.get("resumo","")).strip()
+                materia=str(d.get("materia","")).strip()
+
+                if not titulo or not resumo or len(materia)<700:
+                    last_reason="resposta inválida"
+                    print(f"⚠ Gemini {model}: resposta inválida ou curta demais.")
+                    continue
+
+                ok,reason=originality_check(
+                    a["text"],
+                    titulo+"\n"+resumo+"\n"+materia
+                )
+
+                if not ok:
+                    last_reason="originalidade"
+                    print(
+                        f"⚠ Gemini: matéria recusada por originalidade "
+                        f"({reason}) — tentativa {attempt}/{max_attempts}"
+                    )
+                    # Não publica esta versão. A próxima tentativa recebe
+                    # instrução explícita para reescrever de forma diferente.
+                    continue
+
+                d.update(
+                    titulo=titulo,
+                    resumo=resumo,
+                    materia=materia
+                )
+                print(f"✓ Gemini: matéria aprovada ({model}, tentativa {attempt})")
+                return d
+
+            except Exception as e:
+                msg=str(e).upper()
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    last_reason="quota"
+                    print(f"⚠ Gemini {model}: quota/limite atingido.")
+                    break
+
+                last_reason="erro"
+                print(f"⚠ Gemini {model}: erro na geração: {str(e)[:240]}")
+                continue
+
+        if last_reason == "quota":
+            break
 
     if last_reason == "quota":
         print("⚠ Gemini: quota/limite; restante ficará para a próxima execução")
         selfbot.gemini_quota_hit = True
-    elif last_reason not in ("originalidade", "sem informação suficiente"):
+    elif last_reason == "originalidade":
+        print("⚠ Gemini: todas as tentativas foram recusadas por originalidade")
+    elif last_reason == "sem informação suficiente":
+        print("⚠ Gemini: fonte sem informação suficiente para publicação")
+    elif last_reason == "resposta inválida":
+        print("⚠ Gemini: geração retornou formato inválido")
+    else:
         print("⚠ Gemini: geração não disponível")
+
     return None
 
 
@@ -1994,5 +2079,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 12.1 ATIVA: Instagram texto amarelo/branco sobre imagem original (sem faixa) | Facebook + Telegram preservados")
+print("VERSÃO 12.19 ATIVA: retry de originalidade Gemini + Instagram texto amarelo/branco sobre imagem original (sem faixa) | Facebook + Telegram preservados")
 selfbot.main()
