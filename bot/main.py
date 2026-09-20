@@ -52,6 +52,15 @@ TIMEOUT = 25
 GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
 
+# Fallbacks de IA sem custo obrigatório: somente entram em ação se a chave
+# correspondente existir e o provedor aceitar a requisição.
+GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip()
+MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip()
+AI_PROVIDER_TIMEOUT = int(os.getenv("AI_PROVIDER_TIMEOUT", "90"))
+
 # Filtro editorial: somente notícias relacionadas a música.
 # É aplicado antes do Gemini para impedir que notícias políticas, jurídicas,
 # religiosas ou de outros assuntos consumam a cota do modelo.
@@ -1456,48 +1465,150 @@ def originality_check(source_text,generated_text):
         return False,f"sobreposição 8-gram alta ({overlap:.3f})"
     return True,"OK"
 
+def _ai_extract_text(provider, response):
+    """Extrai o texto JSON das respostas HTTP dos provedores alternativos."""
+    if provider == "groq":
+        choices = response.get("choices") or []
+        if not choices:
+            return ""
+        message = choices[0].get("message") or {}
+        return str(message.get("content") or "").strip()
+
+    if provider == "mistral":
+        choices = response.get("choices") or []
+        if not choices:
+            return ""
+        message = choices[0].get("message") or {}
+        content = message.get("content") or ""
+        if isinstance(content, list):
+            parts=[]
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    parts.append(str(item.get("text") or ""))
+            content="".join(parts)
+        return str(content).strip()
+
+    return ""
+
+
+def _provider_is_quota_error(status_code, body):
+    text = str(body or "").upper()
+    return status_code == 429 or any(x in text for x in (
+        "RESOURCE_EXHAUSTED", "RATE LIMIT", "RATE_LIMIT", "QUOTA",
+        "TOO MANY REQUESTS", "DAILY LIMIT", "LIMIT EXCEEDED",
+    ))
+
+
+def _call_http_provider(provider, api_key, model, prompt):
+    """Chama Groq/Mistral diretamente por HTTP, sem adicionar SDK/dependência."""
+    if provider == "groq":
+        endpoint = "https://api.groq.com/openai/v1/chat/completions"
+    elif provider == "mistral":
+        endpoint = "https://api.mistral.ai/v1/chat/completions"
+    else:
+        raise ValueError(f"Provedor HTTP desconhecido: {provider}")
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.2,
+        "max_tokens": 5000,
+        "response_format": {"type": "json_object"},
+    }
+
+    if provider == "groq":
+        # Evita que o conteúdo de raciocínio seja devolvido junto da matéria.
+        payload["include_reasoning"] = False
+
+    r = requests.post(
+        endpoint,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=AI_PROVIDER_TIMEOUT,
+    )
+
+    body_text = r.text[:1200]
+    if _provider_is_quota_error(r.status_code, body_text):
+        raise RuntimeError(f"QUOTA_HTTP_{r.status_code}: {body_text}")
+
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP_{r.status_code}: {body_text}")
+
+    try:
+        return r.json()
+    except Exception as e:
+        raise RuntimeError(f"Resposta JSON inválida do {provider}: {e}")
+
+
+def _gemini_provider_request(api_key, model, prompt):
+    """Gemini usando a mesma biblioteca já presente no projeto."""
+    client = genai.Client(api_key=api_key)
+    return gemini_request(client, model, prompt)
+
+
+def _build_ai_providers():
+    """Ordem fixa: Gemini principal, Gemini secundário, Groq, Mistral."""
+    providers=[]
+
+    if GEMINI_API_KEY:
+        providers.append(("gemini", GEMINI_API_KEY, GEMINI_MODEL_TEXT))
+
+    if GEMINI_API_KEY_2:
+        # Pode ser outra chave/projeto. A cota continua sendo a do projeto
+        # ao qual a chave pertence; uma segunda chave no mesmo projeto não
+        # cria cota adicional.
+        providers.append(("gemini-2", GEMINI_API_KEY_2, GEMINI_FALLBACK_MODEL))
+
+    if GROQ_API_KEY:
+        providers.append(("groq", GROQ_API_KEY, GROQ_MODEL))
+
+    if MISTRAL_API_KEY:
+        providers.append(("mistral", MISTRAL_API_KEY, MISTRAL_MODEL))
+
+    return providers
+
+
+def _provider_request(provider, api_key, model, prompt):
+    if provider.startswith("gemini"):
+        return _gemini_provider_request(api_key, model, prompt)
+    return _call_http_provider(provider, api_key, model, prompt)
+
+
+def _provider_text(provider, response):
+    if provider.startswith("gemini"):
+        return (getattr(response, "text", None) or "").strip()
+    return _ai_extract_text(provider, response)
+
+
+def _is_quota_exception(exc):
+    msg=str(exc).upper()
+    return any(x in msg for x in (
+        "429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE LIMIT", "RATE_LIMIT",
+        "TOO MANY REQUESTS", "DAILY LIMIT", "LIMIT EXCEEDED",
+    ))
+
+
 def gemini(a,client):
-    """
-    Gera a matéria e faz validação de originalidade.
-    Se a primeira versão for rejeitada, solicita uma nova redação com
-    instruções específicas para eliminar trechos literais antes de desistir.
+    """Geração consolidada com fallback entre provedores sem cobrança automática.
+
+    A função mantém a validação editorial e o verificador de originalidade
+    existentes. Um provedor só é abandonado por quota/erro de serviço; se
+    retornar publicar=false, o próximo provedor pode analisar a mesma fonte.
     """
     if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
-        print("⚠ Gemini: limite de chamadas atingido.")
+        print("⚠ IA: limite de chamadas desta execução atingido.")
         return None
 
-    models=[selfbot.GEMINI_MODEL_TEXT]
-    if selfbot.GEMINI_FALLBACK_MODEL and selfbot.GEMINI_FALLBACK_MODEL not in models:
-        models.append(selfbot.GEMINI_FALLBACK_MODEL)
+    providers=_build_ai_providers()
+    if not providers:
+        print("⚠ IA: nenhuma chave de fallback configurada.")
+        return None
 
-    # Até duas tentativas de redação por modelo. Mantém o limite global
-    # MAX_GEMINI_TEXT_CALLS_PER_RUN como proteção contra excesso de chamadas.
-    max_attempts = min(2, selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN)
-
-    last_reason="erro"
-
-    for attempt in range(1, max_attempts + 1):
-        if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
-            break
-
-        if attempt == 1:
-            retry_instruction = """
-Esta é a primeira redação. Escreva a matéria do zero, com estrutura
-jornalística própria. Não reproduza frases da fonte.
-"""
-        else:
-            retry_instruction = """
-ATENÇÃO: a versão anterior foi rejeitada pelo verificador de originalidade.
-Faça uma NOVA redação, diferente da anterior. Reorganize completamente a
-ordem das informações, varie a construção das frases e não repita sequências
-de palavras da fonte. Os fatos podem ser os mesmos, mas a redação deve ser
-independente. Não copie frases ou parágrafos.
-"""
-
-        prompt=f"""
+    prompt=f"""
 Você é jornalista do Rádio Luz Gospel. Escreva uma matéria NOVA, do zero.
-
-{retry_instruction}
 
 Use SOMENTE os fatos presentes no texto-fonte.
 Não invente nomes, datas, números, locais, declarações ou acontecimentos.
@@ -1528,22 +1639,44 @@ TEXTO-FONTE:
 {a['text']}
 """
 
-        # Primeira tentativa: modelo principal.
-        # Segunda tentativa: se houver modelo alternativo, usa-o; caso contrário
-        # repete o principal com instrução de reescrita.
-        models_this_attempt = models if attempt == 1 else list(reversed(models))
-        for model in models_this_attempt:
+    # Duas passagens no máximo: primeira redação e, se necessário, uma nova
+    # redação com instrução de originalidade. Em cada passagem percorremos os
+    # provedores restantes até encontrar um que responda.
+    max_passes=min(2, len(providers), selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN)
+    last_reason="erro"
+    exhausted_providers=set()
+
+    for pass_index in range(max_passes):
+        if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
+            break
+
+        if pass_index == 0:
+            pass_prompt=prompt + "\nEscreva a primeira versão de forma independente e original."
+        else:
+            pass_prompt=prompt + """
+
+ATENÇÃO: a versão anterior foi rejeitada pelo verificador de originalidade.
+Faça uma NOVA redação, diferente da anterior. Reorganize completamente a
+ordem das informações, varie a construção das frases e não repita sequências
+de palavras da fonte. Os fatos podem ser os mesmos, mas a redação deve ser
+independente. Não copie frases ou parágrafos.
+"""
+
+        for provider_index,(provider,api_key,model) in enumerate(providers):
             if selfbot.gemini_calls >= selfbot.MAX_GEMINI_TEXT_CALLS_PER_RUN:
                 break
+            if provider in exhausted_providers:
+                continue
 
             try:
-                r=selfbot.gemini_request(client,model,prompt)
+                print(f"IA: tentando {provider} / {model}...")
+                response=_provider_request(provider,api_key,model,pass_prompt)
                 selfbot.gemini_calls += 1
 
-                raw=(getattr(r,"text",None) or "").strip()
+                raw=_provider_text(provider,response)
                 if not raw:
                     last_reason="resposta vazia"
-                    print(f"⚠ Gemini {model}: resposta vazia.")
+                    print(f"⚠ {provider}: resposta vazia.")
                     continue
 
                 raw=re.sub(r"^```(?:json)?\s*|\s*```$","",raw).strip()
@@ -1551,7 +1684,7 @@ TEXTO-FONTE:
 
                 if d.get("publicar") is False:
                     last_reason="sem informação suficiente"
-                    print(f"⚠ Gemini {model}: marcou a matéria como não publicável.")
+                    print(f"⚠ {provider}: marcou a matéria como não publicável; tentando próximo provedor.")
                     continue
 
                 titulo=str(d.get("titulo","")).strip()
@@ -1560,7 +1693,7 @@ TEXTO-FONTE:
 
                 if not titulo or not resumo or len(materia)<700:
                     last_reason="resposta inválida"
-                    print(f"⚠ Gemini {model}: resposta inválida ou curta demais.")
+                    print(f"⚠ {provider}: resposta inválida ou curta demais.")
                     continue
 
                 ok,reason=originality_check(
@@ -1571,46 +1704,41 @@ TEXTO-FONTE:
                 if not ok:
                     last_reason="originalidade"
                     print(
-                        f"⚠ Gemini: matéria recusada por originalidade "
-                        f"({reason}) — tentativa {attempt}/{max_attempts}"
+                        f"⚠ {provider}: matéria recusada por originalidade "
+                        f"({reason}) — tentando outra IA."
                     )
-                    # Não publica esta versão. A próxima tentativa recebe
-                    # instrução explícita para reescrever de forma diferente.
                     continue
 
-                d.update(
-                    titulo=titulo,
-                    resumo=resumo,
-                    materia=materia
-                )
-                print(f"✓ Gemini: matéria aprovada ({model}, tentativa {attempt})")
+                d.update(titulo=titulo,resumo=resumo,materia=materia)
+                print(f"✓ IA: matéria aprovada ({provider} / {model}, tentativa {pass_index+1})")
                 return d
 
             except Exception as e:
-                msg=str(e).upper()
-                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:
+                if _is_quota_exception(e):
                     last_reason="quota"
-                    print(f"⚠ Gemini {model}: quota/limite atingido.")
-                    break
+                    exhausted_providers.add(provider)
+                    print(f"⚠ {provider}: quota/limite atingido — passando para o próximo provedor.")
+                    continue
 
                 last_reason="erro"
-                print(f"⚠ Gemini {model}: erro na geração: {str(e)[:240]}")
+                print(f"⚠ {provider}: erro na geração: {str(e)[:240]}")
                 continue
 
-        if last_reason == "quota":
-            break
+        # Se nenhum provedor produziu uma versão válida, a segunda passagem
+        # tenta novamente com instrução de reescrita. Não repete a mesma chave
+        # automaticamente por quota.
 
     if last_reason == "quota":
-        print("⚠ Gemini: quota/limite; restante ficará para a próxima execução")
-        selfbot.gemini_quota_hit = True
+        print("⚠ IA: provedores disponíveis atingiram quota/limite; restante ficará para a próxima execução")
+        selfbot.gemini_quota_hit=True
     elif last_reason == "originalidade":
-        print("⚠ Gemini: todas as tentativas foram recusadas por originalidade")
+        print("⚠ IA: todas as tentativas foram recusadas por originalidade")
     elif last_reason == "sem informação suficiente":
-        print("⚠ Gemini: fonte sem informação suficiente para publicação")
+        print("⚠ IA: provedores não consideraram a fonte suficiente para publicação")
     elif last_reason == "resposta inválida":
-        print("⚠ Gemini: geração retornou formato inválido")
+        print("⚠ IA: geração retornou formato inválido")
     else:
-        print("⚠ Gemini: geração não disponível")
+        print("⚠ IA: nenhum provedor disponível conseguiu gerar a matéria")
 
     return None
 
@@ -2166,5 +2294,5 @@ def main_with_real_reader_promotion():
 
 selfbot.main = main_with_real_reader_promotion
 
-print("VERSÃO 12.20 ATIVA: arte Instagram obrigatória — imagem original preservada + título em retângulo azul semitransparente + trecho branco em negrito (até 4 linhas) + identificação superior | Facebook + Telegram preservados")
+print("VERSÃO 12.21 ATIVA: IA com fallback Gemini → Groq → Mistral + arte Instagram obrigatória — imagem original preservada + título em retângulo azul semitransparente + trecho branco em negrito (até 4 linhas) + identificação superior | Facebook + Telegram preservados")
 selfbot.main()
