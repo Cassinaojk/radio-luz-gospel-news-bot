@@ -1356,22 +1356,18 @@ def facebook_promote(post, source_name_text):
     return False
 
 
-def _instagram_wrap_text(text, max_chars=34, max_lines=4):
-    """Quebra o título em até quatro linhas, evitando cortes nas bordas."""
+def _instagram_wrap_text(text, max_chars=31, max_lines=4):
+    """Quebra o título em até quatro linhas, sem ultrapassar a caixa."""
     words = re.sub(r"\s+", " ", str(text or "").strip()).split()
     lines = []
     current = ""
 
     for word in words:
-        # Quebra palavras excepcionalmente longas para não estourar a caixa.
         if len(word) > max_chars:
             if current:
                 lines.append(current)
                 current = ""
-            chunks = [
-                word[i:i + max_chars]
-                for i in range(0, len(word), max_chars)
-            ]
+            chunks = [word[i:i + max_chars] for i in range(0, len(word), max_chars)]
             lines.extend(chunks[:-1])
             current = chunks[-1]
             continue
@@ -1386,27 +1382,73 @@ def _instagram_wrap_text(text, max_chars=34, max_lines=4):
     if current:
         lines.append(current)
 
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        lines[-1] = lines[-1].rstrip(" .,-:;") + "..."
+    return lines[:max_lines]
 
-    return lines
+
+def _instagram_fit_text(text, max_chars=31, max_lines=4):
+    """Escolhe quebra/tamanho para manter o título dentro do cartão."""
+    for chars, size in (
+        (31, 32),
+        (29, 30),
+        (27, 28),
+        (25, 26),
+        (23, 24),
+        (21, 22),
+    ):
+        lines = _instagram_wrap_text(text, max_chars=chars, max_lines=max_lines)
+        if len(lines) <= max_lines:
+            return lines, size
+
+    lines = _instagram_wrap_text(text, max_chars=21, max_lines=max_lines)
+    if len(lines) > max_lines:
+        # Último recurso: reduz ainda mais a largura por linha para preservar
+        # a leitura sem deixar texto escapar do cartão.
+        lines = _instagram_wrap_text(text, max_chars=18, max_lines=max_lines)
+    return lines, 20
+
+
+def _instagram_logo_url():
+    """Obtém a URL pública do logo que está no repositório."""
+    explicit = os.getenv("INSTAGRAM_LOGO_URL", "").strip()
+    if explicit:
+        return explicit
+
+    repository = os.getenv("GITHUB_REPOSITORY", "").strip()
+    branch = os.getenv("GITHUB_REF_NAME", "").strip() or "main"
+    if repository:
+        return (
+            f"https://raw.githubusercontent.com/{repository}/"
+            f"{quote(branch, safe='')}/radio_luz_gospel_logo.png"
+        )
+    return ""
+
+
+def _instagram_watermark_url(main_image_url, logo_url):
+    """Sobrepõe o logo pequeno, transparente e centralizado no topo."""
+    if not main_image_url or not logo_url:
+        return main_image_url
+
+    return (
+        "https://quickchart.io/watermark?"
+        f"mainImageUrl={quote(main_image_url, safe='')}"
+        f"&markImageUrl={quote(logo_url, safe='')}"
+        "&markRatio=0.075"
+        "&position=topMiddle"
+        "&opacity=0.38"
+        "&margin=22"
+    )
 
 
 def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, background_image_url=""):
     """
     Gera a arte final do Instagram usando a imagem original da matéria.
 
-    A imagem é convertida para JPEG via wsrv.nl e usada como fundo.
-    Sobre ela é colocado um retângulo amarelo semitransparente na parte
-    inferior, com o título em branco e negrito, em até quatro linhas.
-
-    Usa Chart.js v4 explicitamente porque a configuração de annotation
-    abaixo é a sintaxe v3/v4. Sem isso, o QuickChart pode renderizar os
-    eixos do gráfico e ignorar as caixas/textos.
+    O título fica em um cartão amarelo menor, flutuante, com cantos
+    arredondados e contorno azul fino. O logo é aplicado depois pelo
+    QuickChart Watermark API, no centro superior, com baixa opacidade.
     """
     title = re.sub(r"\s+", " ", str(title or "")).strip()
-    lines = _instagram_wrap_text(title, max_chars=34, max_lines=4)
+    lines, font_size = _instagram_fit_text(title, max_chars=31, max_lines=4)
 
     if background_image_url:
         normalized_image_url = (
@@ -1442,34 +1484,36 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
                     "annotations": {
                         "headline_box": {
                             "type": "box",
-                            "xMin": -1,
-                            "xMax": 1,
-                            "yMin": -1,
-                            "yMax": -0.30,
-                            "backgroundColor": "rgba(245, 190, 0, 0.78)",
-                            "borderWidth": 0,
+                            "xMin": -0.84,
+                            "xMax": 0.84,
+                            "yMin": -0.89,
+                            "yMax": -0.60,
+                            "backgroundColor": "rgba(245, 190, 0, 0.82)",
+                            "borderColor": "rgba(0, 105, 230, 0.95)",
+                            "borderWidth": 3,
+                            "borderRadius": 28,
                             "drawTime": "afterDatasetsDraw",
                             "z": 10,
                         },
                         "headline": {
                             "type": "label",
                             "xValue": 0,
-                            "yValue": -0.65,
+                            "yValue": -0.745,
                             "content": lines,
                             "color": "#FFFFFF",
                             "backgroundColor": "rgba(0,0,0,0)",
                             "borderWidth": 0,
                             "font": {
-                                "size": 38,
+                                "size": font_size,
                                 "weight": "bold",
                             },
                             "position": "center",
                             "textAlign": "center",
                             "padding": {
-                                "top": 12,
-                                "bottom": 12,
-                                "left": 28,
-                                "right": 28,
+                                "top": 10,
+                                "bottom": 10,
+                                "left": 26,
+                                "right": 26,
                             },
                             "drawTime": "afterDatasetsDraw",
                             "z": 20,
@@ -1479,16 +1523,8 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
                 },
             },
             "scales": {
-                "x": {
-                    "display": False,
-                    "min": -1,
-                    "max": 1,
-                },
-                "y": {
-                    "display": False,
-                    "min": -1,
-                    "max": 1,
-                },
+                "x": {"display": False, "min": -1, "max": 1},
+                "y": {"display": False, "min": -1, "max": 1},
             },
         },
     }
@@ -1497,9 +1533,7 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
         config["options"]["plugins"]["backgroundImageUrl"] = normalized_image_url
 
     try:
-        encoded = quote(
-            json.dumps(config, ensure_ascii=False, separators=(",", ":"))
-        )
+        encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")))
         return (
             f"https://quickchart.io/chart?"
             f"width={width}&height={height}"
@@ -1512,24 +1546,30 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
 
 
 def instagram_art_url(post):
-    """
-    Gera a arte do Instagram com a imagem original da matéria
-    e o título sobreposto em retângulo amarelo semitransparente.
-    """
+    """Gera a arte do Instagram com foto original, cartão e logo."""
     image_url = social_image_url(post)
     if not image_url:
         print("⚠ Instagram: matéria sem imagem original; arte não pode ser criada.")
         return ""
 
     title = str(post.get("title", "")).strip()
-    return _quickchart_social_overlay(
+    chart_url = _quickchart_social_overlay(
         title,
         "",
         width=1080,
         height=1350,
         background_image_url=image_url,
     )
+    if not chart_url:
+        return ""
 
+    logo_url = _instagram_logo_url()
+    final_url = _instagram_watermark_url(chart_url, logo_url)
+    if logo_url:
+        print("✓ Instagram: logo do repositório aplicado no topo da arte")
+    else:
+        print("⚠ Instagram: logo não localizado; use INSTAGRAM_LOGO_URL ou execute no GitHub Actions")
+    return final_url
 
 def instagram_promote(post, source_name_text):
     if not INSTAGRAM_ENABLED:
@@ -1722,7 +1762,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.26 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram preservados")
+print("VERSÃO 12.27 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram preservados")
 
 _before_urls = set()
 if PROMO_ENABLED:
