@@ -1350,7 +1350,17 @@ def facebook_promote(post, source_name_text):
         if r.ok:
             print("✓ Divulgação: publicada no Facebook")
             return True
-        print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
+        if r.status_code == 400:
+            try:
+                error_data = r.json().get("error", {})
+            except Exception:
+                error_data = {}
+            if str(error_data.get("code", "")) == "190":
+                print("⚠ Divulgação: Facebook token expirado ou inválido (OAuth 190). Renove FACEBOOK_PAGE_ACCESS_TOKEN.")
+            else:
+                print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
+        else:
+            print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
     except Exception as e:
         print("⚠ Divulgação: erro no Facebook:", e)
     return False
@@ -1546,7 +1556,7 @@ def instagram_art_url(post):
         + quote(image_url, safe="")
         + "&markImageUrl="
         + quote(overlay_url, safe="")
-        + "&markRatio=1&position=bottomMiddle&margin=0"
+        + "&markRatio=1&position=bottomMiddle&margin=0&format=png"
     )
 
     print(f"🔍 Instagram debug final_url: {result[:220]}...")
@@ -1585,10 +1595,10 @@ def instagram_promote(post, source_name_text):
             status_code = check.status_code
             quickchart_error = check.headers.get("X-quickchart-error", "")
             check.close()
-            if status_code != 200 or not content_type.startswith("image/"):
+            if status_code != 200 or content_type.split(";", 1)[0].strip() != "image/png":
                 print(
                     "⚠ Divulgação: arte automática inválida "
-                    f"({status_code}, {content_type}). "
+                    f"({status_code}, {content_type}); esperado image/png. "
                     f"{quickchart_error[:240]}"
                 )
                 return False
