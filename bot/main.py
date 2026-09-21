@@ -1482,8 +1482,8 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
     arredondados e contorno azul fino. O logo é aplicado depois pelo
     QuickChart Watermark API, no centro superior, com baixa opacidade.
     """
-    title = re.sub(r"\s+", " ", str(title or "")).strip()
-    lines, font_size = _instagram_fit_text(title, max_chars=31, max_lines=4)
+    excerpt = re.sub(r"\s+", " ", str(excerpt or "")).strip()
+    lines, font_size = _instagram_fit_text(excerpt, max_chars=28, max_lines=4)
 
     # Normaliza a foto original para JPEG público. Isso evita que o QuickChart
     # receba WebP/formatos servidos com MIME incompatível pelo Blogger.
@@ -1520,21 +1520,21 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
                     "annotations": {
                         "headline_box": {
                             "type": "box",
-                            "xMin": -0.84,
-                            "xMax": 0.84,
-                            "yMin": -0.89,
-                            "yMax": -0.60,
-                            "backgroundColor": "rgba(245, 190, 0, 0.82)",
-                            "borderColor": "rgba(0, 105, 230, 0.95)",
-                            "borderWidth": 3,
+                            "xMin": -1,
+                            "xMax": 0.35,
+                            "yMin": -1,
+                            "yMax": -0.15,
+                            "backgroundColor": "rgba(0,45,140,0.78)",
+                            "borderColor": "rgba(0,45,140,0)",
+                            "borderWidth": 0,
                             "borderRadius": 28,
                             "drawTime": "afterDatasetsDraw",
                             "z": 10,
                         },
                         "headline": {
                             "type": "label",
-                            "xValue": 0,
-                            "yValue": -0.745,
+                            "xValue": -0.48,
+                            "yValue": -0.62,
                             "content": lines,
                             "color": "#FFFFFF",
                             "backgroundColor": "rgba(0,0,0,0)",
@@ -1544,7 +1544,7 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
                                 "weight": "bold",
                             },
                             "position": "center",
-                            "textAlign": "center",
+                            "textAlign": "left",
                             "padding": {
                                 "top": 10,
                                 "bottom": 10,
@@ -1595,7 +1595,7 @@ def instagram_art_url(post):
     title = str(post.get("title", "")).strip()
     chart_url = _quickchart_social_overlay(
         title,
-        "",
+        post.get("excerpt","") or title,
         width=1080,
         height=1350,
         background_image_url=image_url,
