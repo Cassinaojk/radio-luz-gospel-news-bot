@@ -45,7 +45,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.28")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.29")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -1442,7 +1442,7 @@ def _instagram_logo_url():
                 candidate,
                 stream=True,
                 timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.28"},
+                headers={"User-Agent": "RadioLuzGospel/12.29"},
             )
             content_type = (r.headers.get("Content-Type") or "").lower()
             status = r.status_code
@@ -1485,12 +1485,16 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
     title = re.sub(r"\s+", " ", str(title or "")).strip()
     lines, font_size = _instagram_fit_text(title, max_chars=31, max_lines=4)
 
-    # Não fazemos uma segunda transformação via wsrv.nl aqui.
-    # O QuickChart já aceita imagens públicas como background (JPG/PNG/WebP),
-    # e remover essa etapa reduz uma chamada HTTP interna quando a arte depois
-    # passa pelo Watermark API. Isso é importante no plano gratuito, que tem
-    # limite curto para carregar imagens encadeadas.
-    normalized_image_url = background_image_url or ""
+    # Normaliza a foto original para JPEG público. Isso evita que o QuickChart
+    # receba WebP/formatos servidos com MIME incompatível pelo Blogger.
+    normalized_image_url = ""
+    if background_image_url:
+        normalized_image_url = (
+            "https://wsrv.nl/?"
+            f"url={quote(background_image_url, safe='')}"
+            "&w=1080&h=1350&fit=contain&cbg=111111"
+            "&output=jpg&q=90"
+        )
 
     config = {
         "type": "scatter",
@@ -1578,7 +1582,11 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
 
 
 def instagram_art_url(post):
-    """Gera a arte do Instagram com foto original, cartão e logo."""
+    """Gera a arte do Instagram com a foto original e o cartão de manchete.
+
+    O logo foi desativado conforme configuração solicitada: nenhuma marca
+    d'água/logotipo é adicionada à imagem final.
+    """
     image_url = social_image_url(post)
     if not image_url:
         print("⚠ Instagram: matéria sem imagem original; arte não pode ser criada.")
@@ -1595,39 +1603,31 @@ def instagram_art_url(post):
     if not chart_url:
         return ""
 
-    logo_url = _instagram_logo_url()
-    if not logo_url:
-        # A arte base continua válida. Não devolvemos uma URL de watermark
-        # quebrada, pois isso faria o Instagram cancelar toda a publicação.
-        print("⚠ Instagram: logo não localizado/acessível; usando a arte base sem logo")
-        return chart_url
-
-    # Pré-carrega a arte base. O Watermark API precisa baixar o mainImageUrl
-    # de seus próprios servidores; deixar a arte já renderizada reduz bastante
-    # os casos de "Invalid response status"/timeout em imagens encadeadas.
+    # Confirma que o QuickChart realmente entregou PNG antes de mandar
+    # a URL para o Instagram.
     for attempt in range(2):
         try:
-            warm = requests.get(chart_url, stream=True, timeout=25)
+            warm = requests.get(chart_url, stream=True, timeout=30)
             warm_status = warm.status_code
             warm_type = (warm.headers.get("Content-Type") or "").lower()
             warm_error = warm.headers.get("X-quickchart-error", "")
             warm.close()
             if warm_status == 200 and warm_type.split(";", 1)[0].strip() == "image/png":
-                break
+                print("✓ Instagram: arte criada sem logo")
+                return chart_url
             print(
-                f"⚠ Instagram: arte base do QuickChart inválida "
+                f"⚠ Instagram: arte do QuickChart inválida "
                 f"({warm_status}, {warm_type}). {warm_error[:300]}"
             )
             return ""
         except Exception as exc:
             if attempt == 1:
-                print(f"⚠ Instagram: erro ao pré-carregar arte: {exc}")
+                print(f"⚠ Instagram: erro ao validar arte: {exc}")
                 return ""
             time.sleep(1)
 
-    final_url = _instagram_watermark_url(chart_url, logo_url)
-    print("✓ Instagram: logo do repositório aplicado no topo da arte")
-    return final_url
+    return ""
+
 
 def instagram_promote(post, source_name_text):
     if not INSTAGRAM_ENABLED:
@@ -1820,7 +1820,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.28 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram preservados")
+print("VERSÃO 12.29 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram preservados")
 
 _before_urls = set()
 if PROMO_ENABLED:
