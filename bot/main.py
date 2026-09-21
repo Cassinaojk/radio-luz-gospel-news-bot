@@ -1356,23 +1356,40 @@ def facebook_promote(post, source_name_text):
     return False
 
 
-def _instagram_wrap_text(text, max_chars=38, max_lines=4):
-    """Quebra texto em no máximo quatro linhas sem inserir o literal \\n."""
+def _instagram_wrap_text(text, max_chars=34, max_lines=4):
+    """Quebra o título em até quatro linhas, evitando cortes nas bordas."""
     words = re.sub(r"\s+", " ", str(text or "").strip()).split()
-    lines, current = [], ""
+    lines = []
+    current = ""
+
     for word in words:
+        # Quebra palavras excepcionalmente longas para não estourar a caixa.
+        if len(word) > max_chars:
+            if current:
+                lines.append(current)
+                current = ""
+            chunks = [
+                word[i:i + max_chars]
+                for i in range(0, len(word), max_chars)
+            ]
+            lines.extend(chunks[:-1])
+            current = chunks[-1]
+            continue
+
         candidate = f"{current} {word}".strip()
         if current and len(candidate) > max_chars:
             lines.append(current)
             current = word
         else:
             current = candidate
+
     if current:
         lines.append(current)
 
     if len(lines) > max_lines:
         lines = lines[:max_lines]
-        lines[-1] = lines[-1].rstrip(" .") + "..."
+        lines[-1] = lines[-1].rstrip(" .,-:;") + "..."
+
     return lines
 
 
@@ -1380,13 +1397,16 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
     """
     Gera a arte final do Instagram usando a imagem original da matéria.
 
-    A imagem passa antes por wsrv.nl para ser convertida para JPEG e
-    enquadrada em 1080x1350 sem cortes. Sobre ela é aplicado, na parte
-    inferior, um retângulo amarelo semitransparente com o título em
-    branco e negrito, limitado a quatro linhas.
+    A imagem é convertida para JPEG via wsrv.nl e usada como fundo.
+    Sobre ela é colocado um retângulo amarelo semitransparente na parte
+    inferior, com o título em branco e negrito, em até quatro linhas.
+
+    Usa Chart.js v4 explicitamente porque a configuração de annotation
+    abaixo é a sintaxe v3/v4. Sem isso, o QuickChart pode renderizar os
+    eixos do gráfico e ignorar as caixas/textos.
     """
     title = re.sub(r"\s+", " ", str(title or "")).strip()
-    lines = _instagram_wrap_text(title, max_chars=38, max_lines=4)
+    lines = _instagram_wrap_text(title, max_chars=34, max_lines=4)
 
     if background_image_url:
         normalized_image_url = (
@@ -1399,17 +1419,20 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
         normalized_image_url = ""
 
     config = {
-        "type": "bar",
+        "type": "scatter",
         "data": {
-            "labels": [""],
             "datasets": [{
-                "data": [1],
+                "data": [{"x": 0, "y": 0}],
+                "pointRadius": 0,
+                "pointHitRadius": 0,
+                "showLine": False,
                 "backgroundColor": "rgba(0,0,0,0)",
                 "borderWidth": 0,
             }],
         },
         "options": {
             "responsive": False,
+            "maintainAspectRatio": False,
             "animation": False,
             "layout": {"padding": 0},
             "plugins": {
@@ -1422,17 +1445,20 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
                             "xMin": -1,
                             "xMax": 1,
                             "yMin": -1,
-                            "yMax": -0.34,
+                            "yMax": -0.30,
                             "backgroundColor": "rgba(245, 190, 0, 0.78)",
                             "borderWidth": 0,
+                            "drawTime": "afterDatasetsDraw",
+                            "z": 10,
                         },
                         "headline": {
                             "type": "label",
                             "xValue": 0,
-                            "yValue": -0.67,
+                            "yValue": -0.65,
                             "content": lines,
                             "color": "#FFFFFF",
-                            "backgroundColor": "rgba(245, 190, 0, 0)",
+                            "backgroundColor": "rgba(0,0,0,0)",
+                            "borderWidth": 0,
                             "font": {
                                 "size": 38,
                                 "weight": "bold",
@@ -1440,18 +1466,29 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
                             "position": "center",
                             "textAlign": "center",
                             "padding": {
-                                "top": 18,
-                                "bottom": 18,
+                                "top": 12,
+                                "bottom": 12,
                                 "left": 28,
                                 "right": 28,
                             },
+                            "drawTime": "afterDatasetsDraw",
+                            "z": 20,
+                            "callout": {"display": False},
                         },
                     }
                 },
             },
             "scales": {
-                "x": {"display": False, "min": -1, "max": 1},
-                "y": {"display": False, "min": -1, "max": 1},
+                "x": {
+                    "display": False,
+                    "min": -1,
+                    "max": 1,
+                },
+                "y": {
+                    "display": False,
+                    "min": -1,
+                    "max": 1,
+                },
             },
         },
     }
@@ -1465,7 +1502,8 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
         )
         return (
             f"https://quickchart.io/chart?"
-            f"width={width}&height={height}&devicePixelRatio=1"
+            f"width={width}&height={height}"
+            f"&devicePixelRatio=1&version=4"
             f"&format=png&c={encoded}"
         )
     except Exception as exc:
