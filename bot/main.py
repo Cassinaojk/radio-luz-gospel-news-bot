@@ -1376,15 +1376,27 @@ def _instagram_wrap_text(text, max_chars=38, max_lines=4):
     return lines
 
 
-def _quickchart_social_overlay(title, excerpt, width=1080, height=1080):
+def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, background_image_url=""):
     """
-    Gera uma arte institucional em PNG para o Instagram.
+    Gera a arte final do Instagram usando a imagem original da matéria.
 
-    Não usa a imagem original da matéria como fundo. Isso evita falhas
-    do QuickChart com WebP, AVIF, redirecionamentos e outros formatos.
+    A imagem passa antes por wsrv.nl para ser convertida para JPEG e
+    enquadrada em 1080x1350 sem cortes. Sobre ela é aplicado, na parte
+    inferior, um retângulo amarelo semitransparente com o título em
+    branco e negrito, limitado a quatro linhas.
     """
-    title = re.sub(r"\s+", " ", str(title or "")).strip()[:180]
-    excerpt = re.sub(r"\s+", " ", str(excerpt or "")).strip()[:420]
+    title = re.sub(r"\s+", " ", str(title or "")).strip()
+    lines = _instagram_wrap_text(title, max_chars=38, max_lines=4)
+
+    if background_image_url:
+        normalized_image_url = (
+            "https://wsrv.nl/?"
+            f"url={quote(background_image_url, safe='')}"
+            "&w=1080&h=1350&fit=contain&cbg=111111"
+            "&output=jpg&q=90"
+        )
+    else:
+        normalized_image_url = ""
 
     config = {
         "type": "bar",
@@ -1392,48 +1404,47 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1080):
             "labels": [""],
             "datasets": [{
                 "data": [1],
-                "backgroundColor": "rgba(15, 35, 75, 1)",
+                "backgroundColor": "rgba(0,0,0,0)",
                 "borderWidth": 0,
             }],
         },
         "options": {
             "responsive": False,
             "animation": False,
+            "layout": {"padding": 0},
             "plugins": {
                 "legend": {"display": False},
                 "tooltip": {"enabled": False},
                 "annotation": {
                     "annotations": {
-                        "brand": {
-                            "type": "label",
-                            "xValue": 0,
-                            "yValue": 0.90,
-                            "content": ["RÁDIO LUZ GOSPEL"],
-                            "color": "#FFFFFF",
-                            "font": {"size": 30, "weight": "bold"},
-                            "position": "center",
+                        "headline_box": {
+                            "type": "box",
+                            "xMin": -1,
+                            "xMax": 1,
+                            "yMin": -1,
+                            "yMax": -0.34,
+                            "backgroundColor": "rgba(245, 190, 0, 0.78)",
+                            "borderWidth": 0,
                         },
-                        "title": {
+                        "headline": {
                             "type": "label",
                             "xValue": 0,
-                            "yValue": 0.57,
-                            "content": [title],
+                            "yValue": -0.67,
+                            "content": lines,
                             "color": "#FFFFFF",
-                            "font": {"size": 42, "weight": "bold"},
+                            "backgroundColor": "rgba(245, 190, 0, 0)",
+                            "font": {
+                                "size": 38,
+                                "weight": "bold",
+                            },
                             "position": "center",
                             "textAlign": "center",
-                            "padding": 20,
-                        },
-                        "excerpt": {
-                            "type": "label",
-                            "xValue": 0,
-                            "yValue": 0.24,
-                            "content": [excerpt],
-                            "color": "#EAF2FF",
-                            "font": {"size": 25},
-                            "position": "center",
-                            "textAlign": "center",
-                            "padding": 18,
+                            "padding": {
+                                "top": 18,
+                                "bottom": 18,
+                                "left": 28,
+                                "right": 28,
+                            },
                         },
                     }
                 },
@@ -1445,37 +1456,40 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1080):
         },
     }
 
+    if normalized_image_url:
+        config["options"]["plugins"]["backgroundImageUrl"] = normalized_image_url
+
     try:
         encoded = quote(
             json.dumps(config, ensure_ascii=False, separators=(",", ":"))
         )
         return (
             f"https://quickchart.io/chart?"
-            f"width={width}&height={height}&format=png&c={encoded}"
+            f"width={width}&height={height}&devicePixelRatio=1"
+            f"&format=png&c={encoded}"
         )
     except Exception as exc:
-        if _VERBOSE_LOG:
-            print(f"⚠ QuickChart: erro ao montar arte: {exc}")
+        print(f"⚠ QuickChart: erro ao montar arte: {exc}")
         return ""
 
 
 def instagram_art_url(post):
     """
-    Gera uma arte institucional independente da imagem da matéria.
+    Gera a arte do Instagram com a imagem original da matéria
+    e o título sobreposto em retângulo amarelo semitransparente.
     """
-    title = str(post.get("title", "")).strip()
-    excerpt = str(
-        post.get("excerpt")
-        or post.get("summary")
-        or post.get("description")
-        or ""
-    ).strip()
+    image_url = social_image_url(post)
+    if not image_url:
+        print("⚠ Instagram: matéria sem imagem original; arte não pode ser criada.")
+        return ""
 
+    title = str(post.get("title", "")).strip()
     return _quickchart_social_overlay(
         title,
-        excerpt,
+        "",
         width=1080,
-        height=1080,
+        height=1350,
+        background_image_url=image_url,
     )
 
 
