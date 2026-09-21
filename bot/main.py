@@ -1477,17 +1477,15 @@ def _instagram_watermark_url(main_image_url, logo_url):
 def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, background_image_url=""):
     """
     Layout Instagram:
-    - Foto original inteira.
-    - Selo azul "NOTÍCIA".
-    - Texto branco simples em negrito (sem sombra).
-    - Texto maior.
-    - Selo mais próximo do texto.
+    - Foto original inteira
+    - Selo azul NOTÍCIA
+    - Texto branco em negrito (sem sombra)
+    - Texto maior
+    - Selo mais próximo do texto
     """
     excerpt = re.sub(r"\s+", " ", str(excerpt or title or "")).strip()
-    lines, font_size = _instagram_fit_text(excerpt, max_chars=26, max_lines=4)
-
-    # aumenta o tamanho final da fonte
-    font_size = max(font_size + 6, 34)
+    lines, font_size = _instagram_fit_text(excerpt, max_chars=24, max_lines=4)
+    font_size = max(font_size + 8, 38)
 
     normalized_image_url = ""
     if background_image_url:
@@ -1499,39 +1497,45 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
 
     config = {
         "type": "scatter",
-        "data": {"datasets": [{"data": [{"x": 0, "y": 0}], "pointRadius": 0}]},
+        "data": {
+            "datasets": [{
+                "data": [{"x": 0, "y": 0}],
+                "pointRadius": 0
+            }]
+        },
         "options": {
             "responsive": False,
             "maintainAspectRatio": False,
             "animation": False,
             "plugins": {
+                "backgroundImageUrl": normalized_image_url,
                 "legend": {"display": False},
                 "tooltip": {"enabled": False},
                 "annotation": {
                     "annotations": {
                         "badge": {
                             "type": "label",
-                            "xValue": -0.70,
-                            "yValue": -0.18,
+                            "xValue": -0.74,
+                            "yValue": -0.12,
                             "content": ["NOTÍCIA"],
                             "backgroundColor": "#1565FF",
                             "color": "#FFFFFF",
                             "borderRadius": 22,
-                            "font": {"size": 26, "weight": "bold"},
-                            "padding": {"top": 10, "bottom": 10, "left": 22, "right": 22},
+                            "font": {"size": 28, "weight": "bold"},
+                            "padding": {"top": 10, "bottom": 10, "left": 24, "right": 24},
                             "callout": {"display": False},
                             "z": 20
                         },
                         "headline": {
                             "type": "label",
                             "xValue": -0.42,
-                            "yValue": -0.36,
+                            "yValue": -0.26,
                             "content": lines,
                             "color": "#FFFFFF",
                             "backgroundColor": "rgba(0,0,0,0)",
                             "font": {"size": font_size, "weight": "bold"},
                             "textAlign": "left",
-                            "padding": {"top": 6, "bottom": 6, "left": 8, "right": 8},
+                            "padding": {"top": 4, "bottom": 4, "left": 6, "right": 6},
                             "callout": {"display": False},
                             "z": 25
                         }
@@ -1545,14 +1549,11 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
         }
     }
 
-    if normalized_image_url:
-        config["options"]["plugins"]["backgroundImageUrl"] = normalized_image_url
-
     encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")))
     return (
         f"https://quickchart.io/chart?width={width}&height={height}"
         f"&devicePixelRatio=1&version=4&format=png&c={encoded}"
-    }
+    )
 
 def instagram_art_url(post):
     """Gera a arte do Instagram com a foto original e o cartão de manchete.
@@ -1568,7 +1569,7 @@ def instagram_art_url(post):
     title = str(post.get("title", "")).strip()
     chart_url = _quickchart_social_overlay(
         title,
-        post.get("excerpt", title),
+        "",
         width=1080,
         height=1350,
         background_image_url=image_url,
