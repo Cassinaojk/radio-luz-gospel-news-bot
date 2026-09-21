@@ -1350,17 +1350,7 @@ def facebook_promote(post, source_name_text):
         if r.ok:
             print("✓ Divulgação: publicada no Facebook")
             return True
-        if r.status_code == 400:
-            try:
-                error_data = r.json().get("error", {})
-            except Exception:
-                error_data = {}
-            if str(error_data.get("code", "")) == "190":
-                print("⚠ Divulgação: Facebook token expirado ou inválido (OAuth 190). Renove FACEBOOK_PAGE_ACCESS_TOKEN.")
-            else:
-                print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
-        else:
-            print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
+        print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
     except Exception as e:
         print("⚠ Divulgação: erro no Facebook:", e)
     return False
@@ -1386,15 +1376,18 @@ def _instagram_wrap_text(text, max_chars=38, max_lines=4):
     return lines
 
 
-def _quickchart_social_overlay(title, excerpt, width=1080, height=480):
-    """Cria uma única camada PNG transparente para a arte do Instagram.
+def _quickchart_social_overlay(
+    title,
+    excerpt,
+    width=1080,
+    height=1080,
+    background_image_url="",
+):
+    """Gera a arte do Instagram em uma única renderização QuickChart.
 
-    A camada contém:
-      - pequeno identificador semitransparente no topo;
-      - título em branco, em negrito, dentro de retângulo azul semitransparente;
-      - trecho da matéria em branco, em negrito, com no máximo quatro linhas.
-
-    Uma única camada é usada para evitar URLs encadeadas no endpoint watermark.
+    A foto original é usada como backgroundImageUrl e o texto é desenhado
+    por cima na mesma renderização. Isso evita o endpoint /watermark, que
+    estava rejeitando algumas imagens WebP vindas do Blogger.
     """
     from urllib.parse import quote
 
@@ -1498,6 +1491,7 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=480):
                 "annotation": {
                     "annotations": annotations,
                 },
+                "backgroundImageUrl": background_image_url or None,
             },
         },
     }
@@ -1525,13 +1519,13 @@ def _instagram_extract_summary(post):
     return re.sub(r"\s+", " ", str(value).strip())
 
 def instagram_art_url(post):
-    """Gera a arte obrigatória do Instagram sem alterar/cortar a foto original.
+    """Gera a arte obrigatória do Instagram em uma única renderização PNG.
 
-    A foto original continua sendo a imagem principal. O QuickChart gera
-    somente uma camada transparente e o Watermark API faz uma única composição.
+    A foto original é carregada diretamente pelo plugin de background do
+    QuickChart e o texto é desenhado na mesma imagem. Assim não há uma
+    segunda requisição ao endpoint /watermark, que estava recusando a
+    imagem original quando ela era entregue como WebP pelo Blogger.
     """
-    from urllib.parse import quote
-
     image_url = social_image_url(post)
     title = re.sub(
         r"\s+",
@@ -1548,20 +1542,18 @@ def instagram_art_url(post):
 
     print(f"🔍 Instagram debug image_url: {image_url}")
 
-    overlay_url = _quickchart_social_overlay(title, excerpt)
-
-    # UMA única composição. Não encadeia watermark sobre watermark.
-    result = (
-        "https://quickchart.io/watermark?mainImageUrl="
-        + quote(image_url, safe="")
-        + "&markImageUrl="
-        + quote(overlay_url, safe="")
-        + "&markRatio=1&position=bottomMiddle&margin=0&format=png"
+    # O QuickChart documenta backgroundImageUrl para colocar uma imagem
+    # pública atrás dos elementos do gráfico. A saída é PNG.
+    result = _quickchart_social_overlay(
+        title,
+        excerpt,
+        width=1080,
+        height=1080,
+        background_image_url=image_url,
     )
 
     print(f"🔍 Instagram debug final_url: {result[:220]}...")
     return result
-
 
 def instagram_promote(post, source_name_text):
     if not INSTAGRAM_ENABLED:
