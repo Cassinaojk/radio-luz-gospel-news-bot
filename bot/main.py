@@ -1475,16 +1475,84 @@ def _instagram_watermark_url(main_image_url, logo_url):
 
 
 def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, background_image_url=""):
+    """
+    Layout Instagram:
+    - Foto original inteira.
+    - Selo azul "NOTÍCIA".
+    - Texto branco simples em negrito (sem sombra).
+    - Texto maior.
+    - Selo mais próximo do texto.
+    """
     excerpt = re.sub(r"\s+", " ", str(excerpt or title or "")).strip()
-    lines, font_size = _instagram_fit_text(excerpt, max_chars=28, max_lines=4)
-    normalized_image_url=""
+    lines, font_size = _instagram_fit_text(excerpt, max_chars=26, max_lines=4)
+
+    # aumenta o tamanho final da fonte
+    font_size = max(font_size + 6, 34)
+
+    normalized_image_url = ""
     if background_image_url:
-        normalized_image_url=("https://wsrv.nl/?"+f"url={quote(background_image_url,safe='')}"+"&w=1080&h=1350&fit=cover&output=jpg&q=92")
-    config={"type":"scatter","data":{"datasets":[{"data":[{"x":0,"y":0}],"pointRadius":0}]},"options":{"responsive":False,"maintainAspectRatio":False,"animation":False,"plugins":{"legend":{"display":False},"tooltip":{"enabled":False},"annotation":{"annotations":{"badge":{"type":"label","xValue":-0.72,"yValue":-0.24,"content":["NOTÍCIA"],"backgroundColor":"#1565FF","color":"#FFFFFF","borderRadius":24,"font":{"size":24,"weight":"bold"},"padding":{"top":10,"bottom":10,"left":22,"right":22},"callout":{"display":False},"z":20},"shadow":{"type":"label","xValue":-0.40,"yValue":-0.58,"content":lines,"color":"rgba(0,0,0,0.45)","backgroundColor":"rgba(0,0,0,0)","font":{"size":font_size,"weight":"bold"},"textAlign":"left","padding":{"top":8,"bottom":8,"left":14,"right":14},"callout":{"display":False},"z":24},"headline":{"type":"label","xValue":-0.42,"yValue":-0.56,"content":lines,"color":"#FFFFFF","backgroundColor":"rgba(0,0,0,0)","font":{"size":font_size,"weight":"bold"},"textAlign":"left","padding":{"top":8,"bottom":8,"left":14,"right":14},"callout":{"display":False},"z":25}}}},"scales":{"x":{"display":False,"min":-1,"max":1},"y":{"display":False,"min":-1,"max":1}}}}
+        normalized_image_url = (
+            "https://wsrv.nl/?"
+            f"url={quote(background_image_url, safe='')}"
+            "&w=1080&h=1350&fit=cover&output=jpg&q=92"
+        )
+
+    config = {
+        "type": "scatter",
+        "data": {"datasets": [{"data": [{"x": 0, "y": 0}], "pointRadius": 0}]},
+        "options": {
+            "responsive": False,
+            "maintainAspectRatio": False,
+            "animation": False,
+            "plugins": {
+                "legend": {"display": False},
+                "tooltip": {"enabled": False},
+                "annotation": {
+                    "annotations": {
+                        "badge": {
+                            "type": "label",
+                            "xValue": -0.70,
+                            "yValue": -0.18,
+                            "content": ["NOTÍCIA"],
+                            "backgroundColor": "#1565FF",
+                            "color": "#FFFFFF",
+                            "borderRadius": 22,
+                            "font": {"size": 26, "weight": "bold"},
+                            "padding": {"top": 10, "bottom": 10, "left": 22, "right": 22},
+                            "callout": {"display": False},
+                            "z": 20
+                        },
+                        "headline": {
+                            "type": "label",
+                            "xValue": -0.42,
+                            "yValue": -0.36,
+                            "content": lines,
+                            "color": "#FFFFFF",
+                            "backgroundColor": "rgba(0,0,0,0)",
+                            "font": {"size": font_size, "weight": "bold"},
+                            "textAlign": "left",
+                            "padding": {"top": 6, "bottom": 6, "left": 8, "right": 8},
+                            "callout": {"display": False},
+                            "z": 25
+                        }
+                    }
+                }
+            },
+            "scales": {
+                "x": {"display": False, "min": -1, "max": 1},
+                "y": {"display": False, "min": -1, "max": 1}
+            }
+        }
+    }
+
     if normalized_image_url:
-        config["options"]["plugins"]["backgroundImageUrl"]=normalized_image_url
-    encoded=quote(json.dumps(config,ensure_ascii=False,separators=(",",":")))
-    return f"https://quickchart.io/chart?width={width}&height={height}&devicePixelRatio=1&version=4&format=png&c={encoded}"
+        config["options"]["plugins"]["backgroundImageUrl"] = normalized_image_url
+
+    encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")))
+    return (
+        f"https://quickchart.io/chart?width={width}&height={height}"
+        f"&devicePixelRatio=1&version=4&format=png&c={encoded}"
+    }
 
 def instagram_art_url(post):
     """Gera a arte do Instagram com a foto original e o cartão de manchete.
