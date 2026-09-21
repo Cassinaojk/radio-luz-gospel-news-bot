@@ -40,7 +40,7 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, quote
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
