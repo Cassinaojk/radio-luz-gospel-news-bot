@@ -1376,184 +1376,108 @@ def _instagram_wrap_text(text, max_chars=38, max_lines=4):
     return lines
 
 
-def _quickchart_social_overlay(
-    title,
-    excerpt,
-    width=1080,
-    height=1080,
-    background_image_url="",
-):
-    """Gera a arte do Instagram em uma única renderização QuickChart.
-
-    A foto original é usada como backgroundImageUrl e o texto é desenhado
-    por cima na mesma renderização. Isso evita o endpoint /watermark, que
-    estava rejeitando algumas imagens WebP vindas do Blogger.
+def _quickchart_social_overlay(title, excerpt, width=1080, height=1080):
     """
-    from urllib.parse import quote
+    Gera uma arte institucional em PNG para o Instagram.
 
-    title_lines = _instagram_wrap_text(title, max_chars=34, max_lines=2)
-    excerpt_lines = _instagram_wrap_text(excerpt, max_chars=52, max_lines=4)
-
-    # Mantém o texto do trecho em no máximo quatro linhas.
-    if len(excerpt_lines) > 4:
-        excerpt_lines = excerpt_lines[:4]
-
-    # A área azul fica atrás do título. A área inferior recebe o trecho branco.
-    # chartjs-plugin-annotation é pré-instalado no QuickChart.
-    annotations = {
-        "titleBox": {
-            "type": "box",
-            "xMin": 0.04,
-            "xMax": 0.96,
-            "yMin": 0.08,
-            "yMax": 0.46,
-            "backgroundColor": "rgba(0, 86, 179, 0.72)",
-            "borderWidth": 0,
-        },
-        "titleText": {
-            "type": "label",
-            "xValue": 0.50,
-            "yValue": 0.27,
-            "content": title_lines,
-            "backgroundColor": "rgba(0,0,0,0)",
-            "borderWidth": 0,
-            "font": {
-                "size": 30,
-                "weight": "bold",
-            },
-            "color": "#FFFFFF",
-            "padding": 0,
-            "textAlign": "center",
-            "position": "center",
-        },
-        "brand": {
-            "type": "label",
-            "xValue": 0.50,
-            "yValue": 0.04,
-            "content": ["RÁDIO LUZ GOSPEL"],
-            "backgroundColor": "rgba(0, 86, 179, 0.58)",
-            "borderWidth": 0,
-            "font": {
-                "size": 16,
-                "weight": "bold",
-            },
-            "color": "rgba(255,255,255,0.88)",
-            "padding": 5,
-            "position": "center",
-        },
-        "excerptText": {
-            "type": "label",
-            "xValue": 0.50,
-            "yValue": 0.70,
-            "content": excerpt_lines,
-            "backgroundColor": "rgba(0,0,0,0)",
-            "borderWidth": 0,
-            "font": {
-                "size": 24,
-                "weight": "bold",
-            },
-            "color": "#FFFFFF",
-            "padding": 0,
-            "textAlign": "center",
-            "position": "center",
-        },
-    }
+    Não usa a imagem original da matéria como fundo. Isso evita falhas
+    do QuickChart com WebP, AVIF, redirecionamentos e outros formatos.
+    """
+    title = re.sub(r"\s+", " ", str(title or "")).strip()[:180]
+    excerpt = re.sub(r"\s+", " ", str(excerpt or "")).strip()[:420]
 
     config = {
         "type": "bar",
         "data": {
             "labels": [""],
             "datasets": [{
-                "data": [0],
-                "backgroundColor": "rgba(0,0,0,0)",
+                "data": [1],
+                "backgroundColor": "rgba(15, 35, 75, 1)",
                 "borderWidth": 0,
             }],
         },
         "options": {
             "responsive": False,
             "animation": False,
-            "maintainAspectRatio": False,
-            "legend": {"display": False},
-            "layout": {"padding": 0},
-            "scales": {
-                "xAxes": [{
-                    "display": False,
-                    "ticks": {"display": False},
-                    "gridLines": {"display": False},
-                }],
-                "yAxes": [{
-                    "display": False,
-                    "ticks": {"display": False, "min": 0, "max": 1},
-                    "gridLines": {"display": False},
-                }],
-            },
             "plugins": {
+                "legend": {"display": False},
+                "tooltip": {"enabled": False},
                 "annotation": {
-                    "annotations": annotations,
+                    "annotations": {
+                        "brand": {
+                            "type": "label",
+                            "xValue": 0,
+                            "yValue": 0.90,
+                            "content": ["RÁDIO LUZ GOSPEL"],
+                            "color": "#FFFFFF",
+                            "font": {"size": 30, "weight": "bold"},
+                            "position": "center",
+                        },
+                        "title": {
+                            "type": "label",
+                            "xValue": 0,
+                            "yValue": 0.57,
+                            "content": [title],
+                            "color": "#FFFFFF",
+                            "font": {"size": 42, "weight": "bold"},
+                            "position": "center",
+                            "textAlign": "center",
+                            "padding": 20,
+                        },
+                        "excerpt": {
+                            "type": "label",
+                            "xValue": 0,
+                            "yValue": 0.24,
+                            "content": [excerpt],
+                            "color": "#EAF2FF",
+                            "font": {"size": 25},
+                            "position": "center",
+                            "textAlign": "center",
+                            "padding": 18,
+                        },
+                    }
                 },
-                "backgroundImageUrl": background_image_url or None,
+            },
+            "scales": {
+                "x": {"display": False, "min": -1, "max": 1},
+                "y": {"display": False, "min": -1, "max": 1},
             },
         },
     }
 
-    config_json = json.dumps(config, ensure_ascii=False, separators=(",", ":"))
-    return (
-        "https://quickchart.io/chart?width=" + str(width)
-        + "&height=" + str(height)
-        + "&devicePixelRatio=1&format=png&version=2.9.4"
-        + "&backgroundColor=rgba(0,0,0,0)"
-        + "&c=" + quote(config_json, safe="")
-    )
+    try:
+        encoded = quote(
+            json.dumps(config, ensure_ascii=False, separators=(",", ":"))
+        )
+        return (
+            f"https://quickchart.io/chart?"
+            f"width={width}&height={height}&format=png&c={encoded}"
+        )
+    except Exception as exc:
+        if _VERBOSE_LOG:
+            print(f"⚠ QuickChart: erro ao montar arte: {exc}")
+        return ""
 
-
-
-def _instagram_extract_summary(post):
-    """Obtém o trecho da matéria para a arte do Instagram."""
-    value = (
-        post.get("resumo")
-        or post.get("summary")
-        or post.get("excerpt")
-        or post.get("description")
-        or ""
-    )
-    return re.sub(r"\s+", " ", str(value).strip())
 
 def instagram_art_url(post):
-    """Gera a arte obrigatória do Instagram em uma única renderização PNG.
-
-    A foto original é carregada diretamente pelo plugin de background do
-    QuickChart e o texto é desenhado na mesma imagem. Assim não há uma
-    segunda requisição ao endpoint /watermark, que estava recusando a
-    imagem original quando ela era entregue como WebP pelo Blogger.
     """
-    image_url = social_image_url(post)
-    title = re.sub(
-        r"\s+",
-        " ",
-        str(post.get("title") or "").strip(),
-    )
-    excerpt = _instagram_extract_summary(post)
-    if not excerpt:
-        excerpt = title
+    Gera uma arte institucional independente da imagem da matéria.
+    """
+    title = str(post.get("title", "")).strip()
+    excerpt = str(
+        post.get("excerpt")
+        or post.get("summary")
+        or post.get("description")
+        or ""
+    ).strip()
 
-    if not image_url or not title:
-        print("⚠ Instagram: imagem original ou título ausente; arte não pode ser gerada.")
-        return None
-
-    print(f"🔍 Instagram debug image_url: {image_url}")
-
-    # O QuickChart documenta backgroundImageUrl para colocar uma imagem
-    # pública atrás dos elementos do gráfico. A saída é PNG.
-    result = _quickchart_social_overlay(
+    return _quickchart_social_overlay(
         title,
         excerpt,
         width=1080,
         height=1080,
-        background_image_url=image_url,
     )
 
-    print(f"🔍 Instagram debug final_url: {result[:220]}...")
-    return result
 
 def instagram_promote(post, source_name_text):
     if not INSTAGRAM_ENABLED:
