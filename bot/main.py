@@ -45,7 +45,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.26")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.28")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -1408,18 +1408,53 @@ def _instagram_fit_text(text, max_chars=31, max_lines=4):
 
 
 def _instagram_logo_url():
-    """Obtém a URL pública do logo que está no repositório."""
+    """
+    Obtém uma URL pública e realmente acessível do logo do repositório.
+
+    O QuickChart precisa conseguir baixar o arquivo diretamente. Por isso
+    tentamos primeiro o jsDelivr (CDN), depois o raw.githubusercontent.com.
+    Se o arquivo não estiver público/acessível, não deixamos uma URL quebrada
+    contaminar a arte inteira.
+    """
+    candidates = []
+
     explicit = os.getenv("INSTAGRAM_LOGO_URL", "").strip()
     if explicit:
-        return explicit
+        candidates.append(explicit)
 
     repository = os.getenv("GITHUB_REPOSITORY", "").strip()
     branch = os.getenv("GITHUB_REF_NAME", "").strip() or "main"
     if repository:
-        return (
-            f"https://raw.githubusercontent.com/{repository}/"
-            f"{quote(branch, safe='')}/radio_luz_gospel_logo.png"
-        )
+        repo_encoded = quote(repository, safe="/")
+        branch_encoded = quote(branch, safe="")
+        candidates.extend([
+            f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/radio_luz_gospel_logo.png",
+            f"https://raw.githubusercontent.com/{repo_encoded}/{branch_encoded}/radio_luz_gospel_logo.png",
+        ])
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            r = requests.get(
+                candidate,
+                stream=True,
+                timeout=12,
+                headers={"User-Agent": "RadioLuzGospel/12.28"},
+            )
+            content_type = (r.headers.get("Content-Type") or "").lower()
+            status = r.status_code
+            r.close()
+            if status == 200 and content_type.startswith("image/"):
+                return candidate
+            print(
+                f"⚠ Instagram: logo não acessível ({status}, {content_type}): {candidate}"
+            )
+        except Exception as exc:
+            print(f"⚠ Instagram: erro ao validar logo: {exc}")
+
     return ""
 
 
@@ -1450,15 +1485,12 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
     title = re.sub(r"\s+", " ", str(title or "")).strip()
     lines, font_size = _instagram_fit_text(title, max_chars=31, max_lines=4)
 
-    if background_image_url:
-        normalized_image_url = (
-            "https://wsrv.nl/?"
-            f"url={quote(background_image_url, safe='')}"
-            "&w=1080&h=1350&fit=contain&cbg=111111"
-            "&output=jpg&q=90"
-        )
-    else:
-        normalized_image_url = ""
+    # Não fazemos uma segunda transformação via wsrv.nl aqui.
+    # O QuickChart já aceita imagens públicas como background (JPG/PNG/WebP),
+    # e remover essa etapa reduz uma chamada HTTP interna quando a arte depois
+    # passa pelo Watermark API. Isso é importante no plano gratuito, que tem
+    # limite curto para carregar imagens encadeadas.
+    normalized_image_url = background_image_url or ""
 
     config = {
         "type": "scatter",
@@ -1564,11 +1596,37 @@ def instagram_art_url(post):
         return ""
 
     logo_url = _instagram_logo_url()
+    if not logo_url:
+        # A arte base continua válida. Não devolvemos uma URL de watermark
+        # quebrada, pois isso faria o Instagram cancelar toda a publicação.
+        print("⚠ Instagram: logo não localizado/acessível; usando a arte base sem logo")
+        return chart_url
+
+    # Pré-carrega a arte base. O Watermark API precisa baixar o mainImageUrl
+    # de seus próprios servidores; deixar a arte já renderizada reduz bastante
+    # os casos de "Invalid response status"/timeout em imagens encadeadas.
+    for attempt in range(2):
+        try:
+            warm = requests.get(chart_url, stream=True, timeout=25)
+            warm_status = warm.status_code
+            warm_type = (warm.headers.get("Content-Type") or "").lower()
+            warm_error = warm.headers.get("X-quickchart-error", "")
+            warm.close()
+            if warm_status == 200 and warm_type.split(";", 1)[0].strip() == "image/png":
+                break
+            print(
+                f"⚠ Instagram: arte base do QuickChart inválida "
+                f"({warm_status}, {warm_type}). {warm_error[:300]}"
+            )
+            return ""
+        except Exception as exc:
+            if attempt == 1:
+                print(f"⚠ Instagram: erro ao pré-carregar arte: {exc}")
+                return ""
+            time.sleep(1)
+
     final_url = _instagram_watermark_url(chart_url, logo_url)
-    if logo_url:
-        print("✓ Instagram: logo do repositório aplicado no topo da arte")
-    else:
-        print("⚠ Instagram: logo não localizado; use INSTAGRAM_LOGO_URL ou execute no GitHub Actions")
+    print("✓ Instagram: logo do repositório aplicado no topo da arte")
     return final_url
 
 def instagram_promote(post, source_name_text):
@@ -1607,7 +1665,7 @@ def instagram_promote(post, source_name_text):
                 print(
                     "⚠ Divulgação: arte automática inválida "
                     f"({status_code}, {content_type}); esperado image/png. "
-                    f"{quickchart_error[:240]}"
+                    f"{quickchart_error[:400]}"
                 )
                 return False
         except Exception as art_error:
@@ -1762,7 +1820,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.27 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram preservados")
+print("VERSÃO 12.28 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram preservados")
 
 _before_urls = set()
 if PROMO_ENABLED:
