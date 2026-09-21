@@ -1476,110 +1476,57 @@ def _instagram_watermark_url(main_image_url, logo_url):
 
 def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, background_image_url=""):
     """
-    Gera a arte final do Instagram usando a imagem original da matéria.
-
-    O título fica em um cartão amarelo menor, flutuante, com cantos
-    arredondados e contorno azul fino. O logo é aplicado depois pelo
-    QuickChart Watermark API, no centro superior, com baixa opacidade.
+    Novo layout:
+    - Foto original.
+    - Degradê azul integrado.
+    - Selo NOTÍCIA.
+    - Texto branco em até 4 linhas.
     """
-    excerpt = re.sub(r"\s+", " ", str(excerpt or "")).strip()
+    excerpt = re.sub(r"\s+", " ", str(excerpt or title or "")).strip()
     lines, font_size = _instagram_fit_text(excerpt, max_chars=28, max_lines=4)
 
-    # Normaliza a foto original para JPEG público. Isso evita que o QuickChart
-    # receba WebP/formatos servidos com MIME incompatível pelo Blogger.
     normalized_image_url = ""
     if background_image_url:
         normalized_image_url = (
             "https://wsrv.nl/?"
             f"url={quote(background_image_url, safe='')}"
-            "&w=1080&h=1350&fit=contain&cbg=111111"
-            "&output=jpg&q=90"
+            "&w=1080&h=1350&fit=cover&output=jpg&q=92"
         )
 
-    config = {
-        "type": "scatter",
-        "data": {
-            "datasets": [{
-                "data": [{"x": 0, "y": 0}],
-                "pointRadius": 0,
-                "pointHitRadius": 0,
-                "showLine": False,
-                "backgroundColor": "rgba(0,0,0,0)",
-                "borderWidth": 0,
-            }],
+    config={
+      "type":"scatter",
+      "data":{"datasets":[{"data":[{"x":0,"y":0}],"pointRadius":0}]},
+      "options":{
+        "responsive":False,"maintainAspectRatio":False,"animation":False,
+        "plugins":{
+          "legend":{"display":False},
+          "tooltip":{"enabled":False},
+          "annotation":{"annotations":{
+            "overlay":{"type":"box","xMin":-1,"xMax":0.45,"yMin":-1,"yMax":-0.08,
+                       "backgroundColor":"rgba(5,45,130,0.72)","borderWidth":0,"z":5},
+            "badge":{"type":"label","xValue":-0.68,"yValue":-0.27,
+                     "content":["NOTÍCIA"],"backgroundColor":"#1F66FF",
+                     "color":"#FFFFFF","borderRadius":24,
+                     "font":{"size":24,"weight":"bold"},
+                     "padding":{"top":10,"bottom":10,"left":22,"right":22},
+                     "callout":{"display":False},"z":20},
+            "headline":{"type":"label","xValue":-0.43,"yValue":-0.60,
+                        "content":lines,"color":"#FFFFFF",
+                        "backgroundColor":"rgba(0,0,0,0)",
+                        "font":{"size":font_size,"weight":"bold"},
+                        "textAlign":"left",
+                        "padding":{"top":6,"bottom":6,"left":12,"right":12},
+                        "callout":{"display":False},"z":25}
+          }}
         },
-        "options": {
-            "responsive": False,
-            "maintainAspectRatio": False,
-            "animation": False,
-            "layout": {"padding": 0},
-            "plugins": {
-                "legend": {"display": False},
-                "tooltip": {"enabled": False},
-                "annotation": {
-                    "annotations": {
-                        "headline_box": {
-                            "type": "box",
-                            "xMin": -1,
-                            "xMax": 0.35,
-                            "yMin": -1,
-                            "yMax": -0.15,
-                            "backgroundColor": "rgba(0,45,140,0.78)",
-                            "borderColor": "rgba(0,45,140,0)",
-                            "borderWidth": 0,
-                            "borderRadius": 28,
-                            "drawTime": "afterDatasetsDraw",
-                            "z": 10,
-                        },
-                        "headline": {
-                            "type": "label",
-                            "xValue": -0.48,
-                            "yValue": -0.62,
-                            "content": lines,
-                            "color": "#FFFFFF",
-                            "backgroundColor": "rgba(0,0,0,0)",
-                            "borderWidth": 0,
-                            "font": {
-                                "size": font_size,
-                                "weight": "bold",
-                            },
-                            "position": "center",
-                            "textAlign": "left",
-                            "padding": {
-                                "top": 10,
-                                "bottom": 10,
-                                "left": 26,
-                                "right": 26,
-                            },
-                            "drawTime": "afterDatasetsDraw",
-                            "z": 20,
-                            "callout": {"display": False},
-                        },
-                    }
-                },
-            },
-            "scales": {
-                "x": {"display": False, "min": -1, "max": 1},
-                "y": {"display": False, "min": -1, "max": 1},
-            },
-        },
+        "scales":{"x":{"display":False,"min":-1,"max":1},
+                  "y":{"display":False,"min":-1,"max":1}}
+      }
     }
-
     if normalized_image_url:
-        config["options"]["plugins"]["backgroundImageUrl"] = normalized_image_url
-
-    try:
-        encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")))
-        return (
-            f"https://quickchart.io/chart?"
-            f"width={width}&height={height}"
-            f"&devicePixelRatio=1&version=4"
-            f"&format=png&c={encoded}"
-        )
-    except Exception as exc:
-        print(f"⚠ QuickChart: erro ao montar arte: {exc}")
-        return ""
-
+        config["options"]["plugins"]["backgroundImageUrl"]=normalized_image_url
+    encoded=quote(json.dumps(config,ensure_ascii=False,separators=(",",":")))
+    return f"https://quickchart.io/chart?width={width}&height={height}&devicePixelRatio=1&version=4&format=png&c={encoded}"
 
 def instagram_art_url(post):
     """Gera a arte do Instagram com a foto original e o cartão de manchete.
@@ -1595,7 +1542,7 @@ def instagram_art_url(post):
     title = str(post.get("title", "")).strip()
     chart_url = _quickchart_social_overlay(
         title,
-        post.get("excerpt","") or title,
+        post.get("excerpt", title),
         width=1080,
         height=1350,
         background_image_url=image_url,
