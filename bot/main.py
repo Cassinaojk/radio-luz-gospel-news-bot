@@ -69,6 +69,13 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
 INSTAGRAM_ENABLED = os.getenv("INSTAGRAM_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
 INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+
+# X / Twitter
+X_ENABLED = os.getenv("X_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
+X_API_KEY = os.getenv("X_API_KEY", "").strip()
+X_API_SECRET = os.getenv("X_API_SECRET", "").strip()
+X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN", "").strip()
+X_ACCESS_TOKEN_SECRET = os.getenv("X_ACCESS_TOKEN_SECRET", "").strip()
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
 # Limites
@@ -1769,6 +1776,54 @@ def telegram_promote(post, source_name_text):
 
 
 
+
+def x_promote(post, source_name_text):
+    """Publica automaticamente a nova matéria no X (Twitter)."""
+    if not X_ENABLED:
+        return False
+    if not X_API_KEY or not X_API_SECRET or not X_ACCESS_TOKEN or not X_ACCESS_TOKEN_SECRET:
+        print("⚠ Divulgação: X não configurado.")
+        return False
+
+    url = promotion_url(post.get("url", ""))
+    if not url:
+        return False
+
+    title = re.sub(r"\s+", " ", str(post.get("title", "") or "")).strip()
+    prefix = (
+        "📰 " + title + "\n\n"
+        "🎵 Leia a matéria completa na Rádio Luz Gospel:\n"
+    )
+    suffix = "\n\n#RadioLuzGospel #NoticiasGospel"
+    # Mantém a URL inteira e encurta somente o título quando necessário.
+    max_text_len = 280
+    available_title = max_text_len - len(prefix) - len(url) - len(suffix)
+    if available_title < 1:
+        available_title = 1
+    title = title[:available_title].rstrip()
+    text = prefix.replace("📰 " + re.sub(r"\s+", " ", str(post.get("title", "") or "")).strip(), "📰 " + title, 1) + url + suffix
+
+    try:
+        from requests_oauthlib import OAuth1
+        endpoint = "https://api.x.com/2/tweets"
+        auth = OAuth1(
+            X_API_KEY,
+            client_secret=X_API_SECRET,
+            resource_owner_key=X_ACCESS_TOKEN,
+            resource_owner_secret=X_ACCESS_TOKEN_SECRET,
+        )
+        r = requests.post(endpoint, json={"text": text}, auth=auth, timeout=TIMEOUT)
+        if r.ok:
+            print("✓ Divulgação: publicada no X")
+            return True
+        print(f"⚠ Divulgação: X HTTP {r.status_code}: {r.text[:300]}")
+    except ImportError:
+        print("⚠ Divulgação: instale requests-oauthlib para publicar no X.")
+    except Exception as e:
+        print("⚠ Divulgação: erro no X:", e)
+    return False
+
+
 def source_name(url):
     host = urlparse(url or "").netloc.lower()
     mapping = (
@@ -1816,6 +1871,7 @@ def promote_new_posts(before_urls):
         telegram_promote(post, source_text)
         facebook_promote(post, source_text)
         instagram_promote(post, source_text)
+        x_promote(post, source_text)
     except Exception as exc:
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
