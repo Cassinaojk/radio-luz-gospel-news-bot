@@ -10,6 +10,7 @@ on:
 jobs:
   publicar-noticias:
     runs-on: ubuntu-latest
+
     steps:
       - name: Baixar código
         uses: actions/checkout@v5
@@ -21,31 +22,54 @@ jobs:
           cache: 'pip'
 
       - name: Instalar dependências
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Ajustar arte do Instagram
         run: python bot/instagram_patch.py
 
       - name: Executar robô de notícias
         env:
+          # Blogger
           BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+
+          # Gemini
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+          # Promoções
           PROMO_ENABLED: 'true'
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           PROMO_UTM_SOURCE: telegram
           PROMO_UTM_MEDIUM: social
           PROMO_UTM_CAMPAIGN: noticias
+
+          # Telegram
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+          # Facebook
           FACEBOOK_ENABLED: 'true'
           FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
           FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+
+          # Instagram
           INSTAGRAM_ENABLED: 'true'
           INSTAGRAM_USER_ID: ${{ secrets.INSTAGRAM_USER_ID }}
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+
+          # Meta Graph API
           META_GRAPH_API_VERSION: v24.0
+
+          # Twitter / X
+          TWITTER_ENABLED: 'true'
+          TWITTER_API_KEY: ${{ secrets.TWITTER_API_KEY }}
+          TWITTER_API_SECRET: ${{ secrets.TWITTER_API_SECRET }}
+          TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
+
         run: python -u bot/main.py
 
       - name: Salvar log em caso de erro
