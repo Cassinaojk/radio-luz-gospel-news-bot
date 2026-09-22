@@ -1780,29 +1780,36 @@ def telegram_promote(post, source_name_text):
 
 def x_promote(post, source_name_text):
     """Publica automaticamente a nova matéria no X (Twitter)."""
+    print("▶ X: iniciando publicação...")
+
     if not X_ENABLED:
+        print("⚠ Divulgação: X desativado (X_ENABLED=false)")
         return False
+
     if not X_API_KEY or not X_API_SECRET or not X_ACCESS_TOKEN or not X_ACCESS_TOKEN_SECRET:
-        print("⚠ Divulgação: X não configurado.")
+        print("⚠ Divulgação: X não configurado. Verifique os 4 Secrets do X.")
         return False
 
     url = promotion_url(post.get("url", ""))
     if not url:
+        print("⚠ Divulgação: X não recebeu uma URL válida para a matéria.")
         return False
 
     title = re.sub(r"\s+", " ", str(post.get("title", "") or "")).strip()
-    prefix = (
-        "📰 " + title + "\n\n"
-        "🎵 Leia a matéria completa na Rádio Luz Gospel:\n"
-    )
+    prefix = "📰 "
+    middle = "\n\n🎵 Leia a matéria completa na Rádio Luz Gospel:\n"
     suffix = "\n\n#RadioLuzGospel #NoticiasGospel"
-    # Mantém a URL inteira e encurta somente o título quando necessário.
     max_text_len = 280
-    available_title = max_text_len - len(prefix) - len(url) - len(suffix)
+    available_title = max_text_len - len(prefix) - len(middle) - len(url) - len(suffix)
+
     if available_title < 1:
-        available_title = 1
-    title = title[:available_title].rstrip()
-    text = prefix.replace("📰 " + re.sub(r"\s+", " ", str(post.get("title", "") or "")).strip(), "📰 " + title, 1) + url + suffix
+        print("⚠ Divulgação: X não conseguiu montar o texto dentro do limite.")
+        return False
+
+    if len(title) > available_title:
+        title = title[:max(1, available_title - 1)].rstrip() + "…"
+
+    text = f"{prefix}{title}{middle}{url}{suffix}"
 
     try:
         from requests_oauthlib import OAuth1
@@ -1814,14 +1821,24 @@ def x_promote(post, source_name_text):
             resource_owner_secret=X_ACCESS_TOKEN_SECRET,
         )
         r = requests.post(endpoint, json={"text": text}, auth=auth, timeout=TIMEOUT)
+
         if r.ok:
-            print("✓ Divulgação: publicada no X")
+            tweet_id = ""
+            try:
+                tweet_id = str(r.json().get("data", {}).get("id", "") or "")
+            except Exception:
+                pass
+            if tweet_id:
+                print(f"✓ Divulgação: publicada no X (ID {tweet_id})")
+            else:
+                print("✓ Divulgação: publicada no X")
             return True
-        print(f"⚠ Divulgação: X HTTP {r.status_code}: {r.text[:300]}")
+
+        print(f"⚠ Divulgação: X HTTP {r.status_code}: {r.text[:500]}")
     except ImportError:
-        print("⚠ Divulgação: instale requests-oauthlib para publicar no X.")
+        print("⚠ Divulgação: requests-oauthlib não está instalado.")
     except Exception as e:
-        print("⚠ Divulgação: erro no X:", e)
+        print("⚠ Divulgação: erro no X:", repr(e))
     return False
 
 
@@ -1877,7 +1894,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.30 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram/X")
+print("VERSÃO 12.31 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram/X | X com diagnóstico OAuth 1.0a")
 
 _before_urls = set()
 if PROMO_ENABLED:
