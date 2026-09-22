@@ -1,3 +1,4 @@
+```yaml
 name: Rádio Luz Gospel - Notícias
 
 on:
@@ -40,7 +41,7 @@ jobs:
           # Gemini
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-          # Promoções
+          # Promoção
           PROMO_ENABLED: 'true'
           PROMO_UTM_SOURCE: telegram
           PROMO_UTM_MEDIUM: social
@@ -76,3 +77,4 @@ jobs:
         if: failure()
         run: |
           echo "O robô terminou com erro. Consulte os logs acima."
+```
