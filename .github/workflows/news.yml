@@ -63,12 +63,11 @@ jobs:
           # Meta Graph API
           META_GRAPH_API_VERSION: v24.0
 
-          # X / Twitter
+          # X / Twitter OAuth 2.0
           X_ENABLED: 'true'
-          X_API_KEY: ${{ secrets.X_API_KEY }}
-          X_API_SECRET: ${{ secrets.X_API_SECRET }}
-          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
-          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
+          X_CLIENT_ID: ${{ secrets.X_CLIENT_ID }}
+          X_CLIENT_SECRET: ${{ secrets.X_CLIENT_SECRET }}
+          X_REFRESH_TOKEN: ${{ secrets.X_REFRESH_TOKEN }}
 
         run: python -u bot/main.py
 
