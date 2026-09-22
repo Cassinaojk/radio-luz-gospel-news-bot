@@ -73,10 +73,9 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 
 # X / Twitter
 X_ENABLED = os.getenv("X_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
-X_API_KEY = os.getenv("X_API_KEY", "").strip()
-X_API_SECRET = os.getenv("X_API_SECRET", "").strip()
-X_ACCESS_TOKEN = os.getenv("X_ACCESS_TOKEN", "").strip()
-X_ACCESS_TOKEN_SECRET = os.getenv("X_ACCESS_TOKEN_SECRET", "").strip()
+X_CLIENT_ID = os.getenv("X_CLIENT_ID", "").strip()
+X_CLIENT_SECRET = os.getenv("X_CLIENT_SECRET", "").strip()
+X_REFRESH_TOKEN = os.getenv("X_REFRESH_TOKEN", "").strip()
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
 # Limites
@@ -1786,8 +1785,8 @@ def x_promote(post, source_name_text):
         print("⚠ Divulgação: X desativado (X_ENABLED=false)")
         return False
 
-    if not X_API_KEY or not X_API_SECRET or not X_ACCESS_TOKEN or not X_ACCESS_TOKEN_SECRET:
-        print("⚠ Divulgação: X não configurado. Verifique os 4 Secrets do X.")
+    if not X_CLIENT_ID or not X_CLIENT_SECRET or not X_REFRESH_TOKEN:
+        print("⚠ Divulgação: X não configurado. Verifique X_CLIENT_ID, X_CLIENT_SECRET e X_REFRESH_TOKEN.")
         return False
 
     url = promotion_url(post.get("url", ""))
@@ -1812,15 +1811,31 @@ def x_promote(post, source_name_text):
     text = f"{prefix}{title}{middle}{url}{suffix}"
 
     try:
-        from requests_oauthlib import OAuth1
-        endpoint = "https://api.x.com/2/tweets"
-        auth = OAuth1(
-            X_API_KEY,
-            client_secret=X_API_SECRET,
-            resource_owner_key=X_ACCESS_TOKEN,
-            resource_owner_secret=X_ACCESS_TOKEN_SECRET,
+        token_response = requests.post(
+            "https://api.x.com/2/oauth2/token",
+            data={
+                "refresh_token": X_REFRESH_TOKEN,
+                "grant_type": "refresh_token",
+            },
+            auth=(X_CLIENT_ID, X_CLIENT_SECRET),
+            timeout=TIMEOUT,
         )
-        r = requests.post(endpoint, json={"text": text}, auth=auth, timeout=TIMEOUT)
+        if not token_response.ok:
+            print(f"⚠ Divulgação: falha ao renovar token X HTTP {token_response.status_code}: {token_response.text[:500]}")
+            return False
+
+        access_token = token_response.json().get("access_token", "")
+        if not access_token:
+            print("⚠ Divulgação: X não retornou access_token.")
+            return False
+
+        endpoint = "https://api.x.com/2/tweets"
+        r = requests.post(
+            endpoint,
+            json={"text": text},
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=TIMEOUT,
+        )
 
         if r.ok:
             tweet_id = ""
