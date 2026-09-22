@@ -27,6 +27,7 @@ def print(*args, **kwargs):
         or message.startswith("⚠ IA:")
         or message.startswith("⚠ Gemini:")
         or message.startswith("⚠ Divulgação:")
+        or message.startswith("✓ Divulgação:")
         or message.startswith("⚠ Instagram:")
         or message.startswith("⚠ Não foi possível")
         or message.startswith("Erro ao consultar Blogger:")
@@ -45,7 +46,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.29")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.30")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -1876,7 +1877,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.29 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram preservados")
+print("VERSÃO 12.30 ATIVA: Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram/X")
 
 _before_urls = set()
 if PROMO_ENABLED:
