@@ -48,7 +48,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.41")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.42")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -77,9 +77,18 @@ X_CLIENT_SECRET = os.getenv("X_CLIENT_SECRET", "").strip()
 X_REFRESH_TOKEN = os.getenv("X_REFRESH_TOKEN", "").strip()
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
-# Chaves de bancos de imagens (opcionais)
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
-PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
+# ===== Geração de imagem por IA (Pollinations) =====
+POLLINATIONS_BASE = "https://image.pollinations.ai/prompt/"
+POLLINATIONS_ENABLED = os.getenv("POLLINATIONS_ENABLED", "true").lower() in ("1", "true", "yes", "sim")
+IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "1200"))
+IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "675"))
+
+# ===== Logo para marca d'água =====
+# Caminho do logo dentro do repositório (relativo à raiz do repo)
+LOGO_PATH_IN_REPO = os.getenv("LOGO_PATH_IN_REPO", "bot/radio_luz_gospel_logo.png").strip()
+LOGO_MARK_RATIO = float(os.getenv("LOGO_MARK_RATIO", "0.08"))   # 8% da largura
+LOGO_OPACITY = float(os.getenv("LOGO_OPACITY", "0.85"))
+LOGO_MARGIN = int(os.getenv("LOGO_MARGIN", "20"))
 
 # Limites
 MAX_POSTS_PER_RUN = 1
@@ -93,6 +102,7 @@ MAX_AGE_DAYS = 3650
 MIN_SOURCE_CHARS = 700
 MIN_SOURCE_PARAGRAPHS = 4
 TIMEOUT = 25
+IMAGE_TIMEOUT = 60
 
 GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
@@ -178,7 +188,6 @@ SOURCES = [
             "https://www.newsgospel.com.br/feed/",
             "https://www.newsgospel.com.br/feed",
             "https://newsgospel.com.br/feed/",
-            "https://newsgospel.com.br/blog/feed/",
         ],
         "music_page": True,
     },
@@ -211,7 +220,6 @@ SOURCES = [
             "https://gospelmais.com/feed/",
             "https://gospelmais.com/feed",
             "https://www.gospelmais.com/feed/",
-            "https://gospelmais.com/feed/?post_type=post",
         ],
         "music_page": True,
     },
@@ -250,12 +258,12 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.41)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.42)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
 _ai_config_logged = False
-_image_provider_logged = False
+_image_logo_url_cache = None
 
 
 def normalize_url(u):
@@ -401,181 +409,174 @@ def videos(x):
 
 
 # ============================================================
-# BUSCA DE IMAGEM SUBSTITUTA
+# LOGO PARA MARCA D'ÁGUA
 # ============================================================
 
-_NO_ATTRIBUTION_LICENSES = (
-    "public domain", "cc0", "pdm", "no restrictions",
-    "no known copyright", "pd-us", "pd-br",
-)
+def get_logo_public_url():
+    """
+    Retorna uma URL pública do logo hospedado no repositório do GitHub.
+    Testa jsDelivr e raw.githubusercontent para ver qual responde.
+    """
+    global _image_logo_url_cache
+    if _image_logo_url_cache is not None:
+        return _image_logo_url_cache
 
-def _wikimedia_search(query, limit=15):
-    if not query:
-        return ""
-    url = "https://commons.wikimedia.org/w/api.php"
-    params = {
-        "action": "query",
-        "format": "json",
-        "generator": "search",
-        "gsrsearch": f'{query} filetype:bitmap',
-        "gsrnamespace": "6",
-        "gsrlimit": limit,
-        "prop": "imageinfo",
-        "iiprop": "url|extmetadata|mime",
-        "iiurlwidth": 1280,
-    }
-    try:
-        r = requests.get(
-            url, params=params, timeout=TIMEOUT,
-            headers={"User-Agent": "RadioLuzGospelBot/12.41 (image search)"},
+    explicit = os.getenv("INSTAGRAM_LOGO_URL", "").strip()
+    candidates = []
+    if explicit:
+        candidates.append(explicit)
+
+    repository = os.getenv("GITHUB_REPOSITORY", "").strip()
+    branch = os.getenv("GITHUB_REF_NAME", "").strip() or "main"
+    if repository:
+        repo_encoded = quote(repository, safe="/")
+        branch_encoded = quote(branch, safe="")
+        logo_encoded = quote(LOGO_PATH_IN_REPO, safe="/")
+        candidates.append(
+            f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/{logo_encoded}"
         )
-        if r.status_code != 200:
-            print(f"⚠ Imagem: Wikimedia HTTP {r.status_code}")
-            return ""
-        data = r.json()
-        pages = (data.get("query") or {}).get("pages") or {}
-
-        preferred = []
-        fallback = []
-        for page in pages.values():
-            infos = page.get("imageinfo") or []
-            if not infos:
-                continue
-            info = infos[0]
-            mime = (info.get("mime") or "").lower()
-            if not mime.startswith("image/"):
-                continue
-            if mime == "image/svg+xml":
-                continue
-            thumb = info.get("thumburl") or info.get("url") or ""
-            if not thumb:
-                continue
-            meta = info.get("extmetadata") or {}
-            license_name = (meta.get("LicenseShortName", {}).get("value") or "").lower()
-            license_full = (meta.get("License", {}).get("value") or "").lower()
-            combined_license = f"{license_name} {license_full}"
-            is_no_attribution = any(x in combined_license for x in _NO_ATTRIBUTION_LICENSES)
-            entry = (thumb, license_name or license_full or "desconhecida")
-            if is_no_attribution:
-                preferred.append(entry)
-            else:
-                fallback.append(entry)
-
-        if preferred:
-            chosen = preferred[0]
-            print(f"✓ Imagem: Wikimedia com licença sem atribuição ({chosen[1]}): {chosen[0][:80]}...")
-            return chosen[0]
-        if fallback:
-            chosen = fallback[0]
-            print(f"⚠ Imagem: Wikimedia somente com licença que pede atribuição ({chosen[1]}); usando mesmo assim com crédito em comentário invisível.")
-            return chosen[0]
-        return ""
-    except Exception as e:
-        print(f"⚠ Imagem: erro na busca Wikimedia: {e}")
-        return ""
-
-
-def _pexels_search(query):
-    if not PEXELS_API_KEY or not query:
-        return ""
-    try:
-        r = requests.get(
-            "https://api.pexels.com/v1/search",
-            params={"query": query, "per_page": 5, "orientation": "landscape"},
-            headers={"Authorization": PEXELS_API_KEY},
-            timeout=TIMEOUT,
+        candidates.append(
+            f"https://raw.githubusercontent.com/{repo_encoded}/{branch_encoded}/{logo_encoded}"
         )
-        if r.status_code != 200:
-            print(f"⚠ Imagem: Pexels HTTP {r.status_code}")
-            return ""
-        photos = (r.json().get("photos") or [])
-        if photos:
-            url = photos[0].get("src", {}).get("large2x") or photos[0].get("src", {}).get("large") or ""
-            if url:
-                print(f"✓ Imagem: Pexels: {url[:80]}...")
-                return url
-    except Exception as e:
-        print(f"⚠ Imagem: erro na busca Pexels: {e}")
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            r = requests.get(
+                candidate, stream=True, timeout=12,
+                headers={"User-Agent": "RadioLuzGospel/12.42"},
+            )
+            status = r.status_code
+            content_type = (r.headers.get("Content-Type") or "").lower()
+            r.close()
+            if status == 200 and content_type.startswith("image/"):
+                print(f"✓ Logo público encontrado: {candidate}")
+                _image_logo_url_cache = candidate
+                return candidate
+            print(f"⚠ Logo não acessível ({status}, {content_type}): {candidate}")
+        except Exception as exc:
+            print(f"⚠ Erro ao validar logo: {exc}")
+
+    _image_logo_url_cache = ""
     return ""
 
 
-def _pixabay_search(query):
-    if not PIXABAY_API_KEY or not query:
+# ============================================================
+# GERAÇÃO DE IMAGEM POR IA (Pollinations)
+# ============================================================
+
+def _build_image_prompt(article, generated):
+    """
+    Constrói um prompt em inglês para a Pollinations, sempre dentro
+    do universo gospel. Usa o prompt sugerido pelo Gemini se disponível.
+    """
+    base = (generated.get("prompt_imagem", "") or "").strip()
+    if not base:
+        # Fallback: usa título como referência
+        base = article.get("title", "") or generated.get("titulo", "")
+
+    # Garante que o estilo gospel esteja presente
+    style_suffix = (
+        "photorealistic, cinematic photography, warm golden lighting, "
+        "christian gospel atmosphere, church setting, worship mood, "
+        "professional news photography, shallow depth of field, "
+        "high detail, 16:9 aspect ratio"
+    )
+    if "photorealistic" not in base.lower() and "photo" not in base.lower():
+        prompt = f"{base}, {style_suffix}"
+    else:
+        prompt = base
+
+    prompt = re.sub(r"\s+", " ", prompt).strip()[:800]
+    return prompt
+
+
+def generate_image_url(prompt):
+    """
+    Gera URL pública da Pollinations para o prompt dado.
+    Retorna URL (string) ou "" se falhar.
+    """
+    if not POLLINATIONS_ENABLED or not prompt:
         return ""
     try:
-        r = requests.get(
-            "https://pixabay.com/api/",
-            params={
-                "key": PIXABAY_API_KEY,
-                "q": query,
-                "image_type": "photo",
-                "orientation": "horizontal",
-                "per_page": 5,
-                "safesearch": "true",
-            },
-            timeout=TIMEOUT,
+        encoded = quote(prompt, safe="")
+        seed = random.randint(1, 999999)
+        url = (
+            f"{POLLINATIONS_BASE}{encoded}"
+            f"?width={IMAGE_WIDTH}&height={IMAGE_HEIGHT}"
+            f"&seed={seed}&model=flux&nologo=true"
         )
-        if r.status_code != 200:
-            print(f"⚠ Imagem: Pixabay HTTP {r.status_code}")
-            return ""
-        hits = (r.json().get("hits") or [])
-        if hits:
-            url = hits[0].get("largeImageURL") or hits[0].get("webformatURL") or ""
-            if url:
-                print(f"✓ Imagem: Pixabay: {url[:80]}...")
-                return url
+        print(f"Imagem: solicitando geração (Pollinations)...")
+        # Valida que a imagem existe e é PNG/JPEG
+        r = requests.get(url, stream=True, timeout=IMAGE_TIMEOUT)
+        status = r.status_code
+        content_type = (r.headers.get("Content-Type") or "").lower()
+        r.close()
+        if status == 200 and content_type.startswith("image/"):
+            print(f"✓ Imagem: gerada com sucesso.")
+            return url
+        print(f"⚠ Imagem: Pollinations HTTP {status} ({content_type})")
     except Exception as e:
-        print(f"⚠ Imagem: erro na busca Pixabay: {e}")
+        print(f"⚠ Imagem: erro na geração Pollinations: {e}")
     return ""
 
 
-def _theme_keywords(article):
-    text = _music_norm(article.get("title", "") + " " + article.get("text", ""))
-    if any(x in text for x in ("turne", "show", "shows", "concerto", "palco", "festival")):
-        return "gospel concert"
-    if any(x in text for x in ("album", "single", "ep", "gravacao", "estudio")):
-        return "gospel music studio"
-    if any(x in text for x in ("videoclipe", "clipe")):
-        return "music video production"
-    return "gospel worship music"
+def apply_logo_watermark(image_url):
+    """
+    Aplica o logo pequeno no topo central via QuickChart Watermark.
+    Se não houver logo público, devolve a imagem original sem marca.
+    """
+    if not image_url:
+        return image_url
+    logo_url = get_logo_public_url()
+    if not logo_url:
+        print("⚠ Imagem: logo público indisponível; mantendo imagem sem marca.")
+        return image_url
 
-
-def find_substitute_image(article, subject_name=""):
-    global _image_provider_logged
-    if not _image_provider_logged:
-        print(
-            "Imagens: "
-            f"Wikimedia=SIM | "
-            f"Pexels={'SIM' if PEXELS_API_KEY else 'NÃO'} | "
-            f"Pixabay={'SIM' if PIXABAY_API_KEY else 'NÃO'}"
+    try:
+        watermark_url = (
+            "https://quickchart.io/watermark?"
+            f"mainImageUrl={quote(image_url, safe='')}"
+            f"&markImageUrl={quote(logo_url, safe='')}"
+            f"&markRatio={LOGO_MARK_RATIO}"
+            "&position=topMiddle"
+            f"&opacity={LOGO_OPACITY}"
+            f"&margin={LOGO_MARGIN}"
         )
-        _image_provider_logged = True
+        # Valida que o QuickChart gerou o PNG com marca
+        r = requests.get(watermark_url, stream=True, timeout=IMAGE_TIMEOUT)
+        status = r.status_code
+        content_type = (r.headers.get("Content-Type") or "").lower()
+        r.close()
+        if status == 200 and content_type.split(";", 1)[0].strip() == "image/png":
+            print("✓ Imagem: marca d'água aplicada com sucesso.")
+            return watermark_url
+        print(f"⚠ Imagem: QuickChart watermark HTTP {status} ({content_type})")
+    except Exception as e:
+        print(f"⚠ Imagem: erro ao aplicar marca d'água: {e}")
+    return image_url
 
-    subject = (subject_name or "").strip()
 
-    if subject:
-        print(f"Imagem: procurando substituta para '{subject}'...")
-        for label, fn in (
-            ("Wikimedia", lambda: _wikimedia_search(subject)),
-            ("Pexels", lambda: _pexels_search(subject)),
-            ("Pixabay", lambda: _pixabay_search(subject)),
-        ):
-            url = fn()
-            if url:
-                return url, f"{label} (artista: {subject})"
-
-    theme = _theme_keywords(article)
-    print(f"Imagem: procurando substituta temática '{theme}'...")
-    for label, fn in (
-        ("Wikimedia", lambda: _wikimedia_search(theme)),
-        ("Pexels", lambda: _pexels_search(theme)),
-        ("Pixabay", lambda: _pixabay_search(theme)),
-    ):
-        url = fn()
-        if url:
-            return url, f"{label} (tema: {theme})"
-
-    return "", ""
+def build_final_image(article, generated):
+    """
+    Pipeline completo:
+    1. Gera imagem por IA (Pollinations).
+    2. Aplica marca d'água (QuickChart).
+    3. Se falhar em qualquer etapa, retorna ("", "fallback") para o chamador
+       decidir usar a imagem original.
+    Retorna (url_final, origem).
+    """
+    prompt = _build_image_prompt(article, generated)
+    ai_url = generate_image_url(prompt)
+    if not ai_url:
+        return "", ""
+    final_url = apply_logo_watermark(ai_url)
+    if final_url:
+        return final_url, "Pollinations + QuickChart (logo)"
+    return ai_url, "Pollinations (sem logo)"
 
 
 # ============================================================
@@ -653,14 +654,12 @@ def links(source):
     seen = set()
     source_host = urlparse(source["url"]).netloc.lower()
 
-    # Normaliza host removendo www. para comparação
     def host_matches(u):
         h = urlparse(u).netloc.lower()
         if h == source_host:
             return True
         if h.endswith("." + source_host):
             return True
-        # Comparação sem www.
         h_no_www = h.replace("www.", "", 1)
         s_no_www = source_host.replace("www.", "", 1)
         return h_no_www == s_no_www or h_no_www.endswith("." + s_no_www)
@@ -1024,9 +1023,19 @@ OUTRAS REGRAS:
   musical mais importante citado na matéria (ex.: "Banda Catedral",
   "Kim", "Renascer Praise"). Se não houver pessoa ou banda específica,
   deixe string vazia "".
+- no campo "prompt_imagem", escreva em INGLÊS uma descrição de CENA para
+  gerar uma FOTO realista que ilustre a matéria. A descrição deve:
+  * descrever uma cena gospel (palco de igreja, culto, louvor, coral,
+    show gospel, estúdio de gravação, microfone, instrumentos, multidão
+    com mãos levantadas, iluminação quente, etc.);
+  * NÃO citar nomes de pessoas reais (para evitar rostos falsos);
+  * NÃO pedir rostos específicos de artistas;
+  * usar termos como "photorealistic", "cinematic lighting",
+    "professional photography", "shallow depth of field";
+  * ter no máximo 60 palavras.
 
 FORMATO:
-{{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"..."}}
+{{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"...","prompt_imagem":"..."}}
 
 TÍTULO ORIGINAL:
 {article['title']}
@@ -1071,6 +1080,7 @@ construções das frases. Não repita sequências da fonte.
                 resumo = str(data.get("resumo", "")).strip()
                 materia = str(data.get("materia", "")).strip()
                 assunto = str(data.get("assunto_principal", "")).strip()
+                prompt_imagem = str(data.get("prompt_imagem", "")).strip()
                 if not titulo or not resumo or len(materia) < 700:
                     last_reason = "resposta inválida"
                     print(f"⚠ {provider}: resposta inválida ou curta demais.")
@@ -1089,6 +1099,7 @@ construções das frases. Não repita sequências da fonte.
                     "resumo": resumo,
                     "materia": materia,
                     "assunto_principal": assunto,
+                    "prompt_imagem": prompt_imagem,
                 }
             except Exception as exc:
                 if _is_quota_exception(exc):
@@ -1266,16 +1277,16 @@ def main():
                 break
             continue
 
-        subject = generated.get("assunto_principal", "") or ""
-        substitute, origin = find_substitute_image(article, subject)
+        # ===== Geração de imagem por IA + marca d'água =====
+        final_image, image_origin = build_final_image(article, generated)
 
-        if not substitute:
-            ignored += 1
-            print(f"⚠ Imagem: nenhuma imagem substituta encontrada para '{article['title'][:70]}...' — matéria pulada (política de imagens).")
-            continue
+        if not final_image:
+            # Fallback: imagem original da fonte
+            print("⚠ Imagem: IA falhou; usando imagem original da fonte como fallback.")
+            final_image = article["image"]
+            image_origin = "Fallback: imagem original da fonte"
 
-        print(f"✓ Imagem substituta escolhida: {origin}")
-        print(f"  URL: {substitute[:120]}")
+        print(f"✓ Imagem final: {image_origin}")
 
         try:
             post_labels = ["Notícias", "Rádio Luz Gospel"]
@@ -1286,7 +1297,7 @@ def main():
                 blogId=BLOGGER_BLOG_ID,
                 body={
                     "title": generated["titulo"].strip(),
-                    "content": html(article, generated, final_image=substitute, image_origin=origin),
+                    "content": html(article, generated, final_image=final_image, image_origin=image_origin),
                     "labels": post_labels,
                 },
                 isDraft=False,
@@ -1605,7 +1616,7 @@ def instagram_promote(post, source_name_text):
             timeout=TIMEOUT,
         )
         if publish.ok:
-            print("✓ Divulgação: publicada no Instagram com a arte obrigatória (imagem original + título + trecho + identificação)")
+            print("✓ Divulgação: publicada no Instagram com a arte obrigatória")
             return True
         print(f"⚠ Divulgação: Instagram publicação HTTP {publish.status_code}: {publish.text[:300]}")
     except Exception as e:
@@ -1760,7 +1771,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.41 ATIVA: UAU Gospel removida | prompt menos restritivo para matérias musicais | imagem substituta (Wikimedia/Pexels/Pixabay) | política b | Spotify após 2º parágrafo | sem Fonte/link no final")
+print("VERSÃO 12.42 ATIVA: imagem gerada por IA (Pollinations) + marca d'água (QuickChart) | fallback para imagem original | UAU Gospel removida | prompt IA menos restritivo | Spotify após 2º parágrafo | sem Fonte/link no final")
 
 _before_urls = set()
 if PROMO_ENABLED:
