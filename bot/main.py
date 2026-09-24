@@ -45,14 +45,14 @@ def print(*args, **kwargs):
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from zoneinfo import ZoneInfo
 from urllib.parse import urlparse, urljoin, quote
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.45")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.46")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -83,7 +83,10 @@ POLLINATIONS_ENABLED = os.getenv("POLLINATIONS_ENABLED", "true").lower() in ("1"
 IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "1200"))
 IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "675"))
 
-# ===== Logo para marca d'água =====
+# ===== Logo para marca d'água (DESATIVADO por decisão do usuário) =====
+# As variáveis continuam aqui para compatibilidade, mas a marca d'água
+# não é mais aplicada por padrão (WATERMARK_ENABLED=false).
+WATERMARK_ENABLED = os.getenv("WATERMARK_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
 LOGO_PATH_IN_REPO = os.getenv("LOGO_PATH_IN_REPO", "bot/radio_luz_gospel_logo.png").strip()
 LOGO_MARK_RATIO = float(os.getenv("LOGO_MARK_RATIO", "0.08"))
 LOGO_OPACITY = float(os.getenv("LOGO_OPACITY", "0.85"))
@@ -179,26 +182,18 @@ def is_music_article(article):
 
 
 def quick_music_prefilter(article):
-    """
-    Pré-filtro no título e primeiros 400 caracteres do texto.
-    Evita gastar cota do Gemini com matérias claramente não-musicais.
-    Retorna (passou, motivo_se_falhou).
-    """
     title = _music_norm(article.get("title", ""))
     head = _music_norm(article.get("text", "")[:400])
     combined = f"{title} {head}"
 
-    # Se o título já tem termo forte, passa.
     if any(t in title for t in MUSIC_STRONG_TERMS):
         return True, ""
 
-    # Se o começo do texto tem termo forte + apoio, passa.
     strong = sum(1 for t in MUSIC_STRONG_TERMS if t in combined)
     support = sum(1 for t in MUSIC_SUPPORT_TERMS if t in combined)
     if strong >= 1 and support >= 1:
         return True, ""
 
-    # Caso contrário, não é claramente musical — pula sem gastar IA.
     return False, "sem termos musicais fortes no título/trecho inicial"
 
 
@@ -290,7 +285,7 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.45)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.46)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -442,7 +437,7 @@ def videos(x):
 
 
 # ============================================================
-# LOGO PARA MARCA D'ÁGUA
+# LOGO PARA MARCA D'ÁGUA (mantido apenas para uso opcional)
 # ============================================================
 
 def get_logo_public_url():
@@ -476,7 +471,7 @@ def get_logo_public_url():
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.45"},
+                headers={"User-Agent": "RadioLuzGospel/12.46"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -526,7 +521,7 @@ def get_fallback_image_url():
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.45"},
+                headers={"User-Agent": "RadioLuzGospel/12.46"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -593,7 +588,8 @@ def generate_image_url(prompt):
 
 
 def apply_logo_watermark(image_url):
-    if not image_url:
+    # Mantido para uso opcional futuro (WATERMARK_ENABLED=true).
+    if not image_url or not WATERMARK_ENABLED:
         return image_url
     logo_url = get_logo_public_url()
     if not logo_url:
@@ -628,9 +624,10 @@ def build_final_image(article, generated):
     ai_url = generate_image_url(prompt)
     if not ai_url:
         return "", ""
+    # Marca d'água desativada por decisão do usuário (WATERMARK_ENABLED=false).
     final_url = apply_logo_watermark(ai_url)
-    if final_url:
-        return final_url, "Pollinations + QuickChart (logo)"
+    if final_url and final_url != ai_url:
+        return final_url, "Pollinations + marca d'água"
     return ai_url, "Pollinations (sem logo)"
 
 
@@ -1609,6 +1606,36 @@ def instagram_art_url(post):
     return ""
 
 
+def _instagram_check_last_post():
+    """
+    Verifica se o último post do Instagram foi criado nos últimos 90 segundos.
+    Usado quando a API retorna 403 anti-spam mas pode ter publicado mesmo assim.
+    """
+    try:
+        r = requests.get(
+            f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}/media",
+            params={
+                "fields": "id,timestamp,media_type",
+                "limit": 1,
+                "access_token": INSTAGRAM_ACCESS_TOKEN,
+            },
+            timeout=TIMEOUT,
+        )
+        if not r.ok:
+            return False
+        data = r.json().get("data", [])
+        if not data:
+            return False
+        last_ts = data[0].get("timestamp", "")
+        if not last_ts:
+            return False
+        last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - last_dt) < timedelta(seconds=90)
+    except Exception as exc:
+        print(f"⚠ Instagram: não foi possível checar último post: {exc}")
+        return False
+
+
 def instagram_promote(post, source_name_text):
     if not INSTAGRAM_ENABLED:
         return False
@@ -1693,6 +1720,17 @@ def instagram_promote(post, source_name_text):
         if publish.ok:
             print("✓ Divulgação: publicada no Instagram com a arte obrigatória")
             return True
+
+        # Tratamento especial do erro 403 anti-spam:
+        # A API pode retornar 403 mas ter publicado mesmo assim.
+        if publish.status_code == 403:
+            print(f"⚠ Divulgação: Instagram retornou 403 (possível anti-spam); verificando se publicou...")
+            time.sleep(3)
+            if _instagram_check_last_post():
+                print("✓ Divulgação: Instagram publicou apesar do 403 (anti-spam) — tratado como sucesso")
+                return True
+            print("⚠ Divulgação: Instagram bloqueou de verdade (anti-spam). Aguarde algumas horas para tentar novamente.")
+
         print(f"⚠ Divulgação: Instagram publicação HTTP {publish.status_code}: {publish.text[:300]}")
     except Exception as e:
         print("⚠ Divulgação: erro no Instagram:", e)
@@ -1781,7 +1819,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.45 ATIVA: prompt permissivo (Opção A) + pré-filtro Python | imagem IA + logo | fallback institucional | X removido | Spotify após 2º parágrafo")
+print("VERSÃO 12.46 ATIVA: logo desativado | Instagram trata 403 anti-spam | prompt permissivo | pré-filtro Python | imagem IA (Pollinations) | fallback institucional | Spotify após 2º parágrafo")
 
 _before_urls = set()
 if PROMO_ENABLED:
