@@ -4,7 +4,6 @@ Robô GitHub Actions para coletar notícias de fontes gospel, gerar matérias or
 
 ## Fontes
 - News Gospel
-- UAU Gospel
 - Folha Gospel — Música
 - Guiame — Música
 
