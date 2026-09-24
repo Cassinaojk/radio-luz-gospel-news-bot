@@ -24,10 +24,12 @@ def print(*args, **kwargs):
         or message.startswith("Falhas:")
         or message.startswith("✓ Publicada:")
         or message.startswith("✓ Imagem:")
+        or message.startswith("✓ Fallback:")
         or message.startswith("⚠ Blogger:")
         or message.startswith("⚠ IA:")
         or message.startswith("⚠ Gemini:")
         or message.startswith("⚠ Imagem:")
+        or message.startswith("⚠ Fallback:")
         or message.startswith("⚠ Divulgação:")
         or message.startswith("✓ Divulgação:")
         or message.startswith("⚠ Instagram:")
@@ -48,7 +50,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.42")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.44")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -71,10 +73,6 @@ INSTAGRAM_ENABLED = os.getenv("INSTAGRAM_ENABLED", "false").lower() in ("1", "tr
 INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 
-X_ENABLED = os.getenv("X_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
-X_CLIENT_ID = os.getenv("X_CLIENT_ID", "").strip()
-X_CLIENT_SECRET = os.getenv("X_CLIENT_SECRET", "").strip()
-X_REFRESH_TOKEN = os.getenv("X_REFRESH_TOKEN", "").strip()
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
 # ===== Geração de imagem por IA (Pollinations) =====
@@ -84,11 +82,16 @@ IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "1200"))
 IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "675"))
 
 # ===== Logo para marca d'água =====
-# Caminho do logo dentro do repositório (relativo à raiz do repo)
 LOGO_PATH_IN_REPO = os.getenv("LOGO_PATH_IN_REPO", "bot/radio_luz_gospel_logo.png").strip()
-LOGO_MARK_RATIO = float(os.getenv("LOGO_MARK_RATIO", "0.08"))   # 8% da largura
+LOGO_MARK_RATIO = float(os.getenv("LOGO_MARK_RATIO", "0.08"))
 LOGO_OPACITY = float(os.getenv("LOGO_OPACITY", "0.85"))
 LOGO_MARGIN = int(os.getenv("LOGO_MARGIN", "20"))
+
+# ===== Imagem de fallback (institucional) =====
+FALLBACK_IMAGE_PATH_IN_REPO = os.getenv(
+    "FALLBACK_IMAGE_PATH_IN_REPO",
+    "bot/radio_luz_gospel_fallback.png",
+).strip()
 
 # Limites
 MAX_POSTS_PER_RUN = 1
@@ -258,12 +261,13 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.42)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.44)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
 _ai_config_logged = False
 _image_logo_url_cache = None
+_fallback_image_url_cache = None
 
 
 def normalize_url(u):
@@ -413,10 +417,6 @@ def videos(x):
 # ============================================================
 
 def get_logo_public_url():
-    """
-    Retorna uma URL pública do logo hospedado no repositório do GitHub.
-    Testa jsDelivr e raw.githubusercontent para ver qual responde.
-    """
     global _image_logo_url_cache
     if _image_logo_url_cache is not None:
         return _image_logo_url_cache
@@ -447,7 +447,7 @@ def get_logo_public_url():
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.42"},
+                headers={"User-Agent": "RadioLuzGospel/12.44"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -465,20 +465,64 @@ def get_logo_public_url():
 
 
 # ============================================================
+# IMAGEM DE FALLBACK (INSTITUCIONAL)
+# ============================================================
+
+def get_fallback_image_url():
+    global _fallback_image_url_cache
+    if _fallback_image_url_cache is not None:
+        return _fallback_image_url_cache
+
+    explicit = os.getenv("FALLBACK_IMAGE_URL", "").strip()
+    if explicit:
+        _fallback_image_url_cache = explicit
+        print(f"✓ Fallback: usando URL explícita: {explicit}")
+        return explicit
+
+    repository = os.getenv("GITHUB_REPOSITORY", "").strip()
+    branch = os.getenv("GITHUB_REF_NAME", "").strip() or "main"
+    candidates = []
+    if repository:
+        repo_encoded = quote(repository, safe="/")
+        branch_encoded = quote(branch, safe="")
+        path_encoded = quote(FALLBACK_IMAGE_PATH_IN_REPO, safe="/")
+        candidates.append(
+            f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/{path_encoded}"
+        )
+        candidates.append(
+            f"https://raw.githubusercontent.com/{repo_encoded}/{branch_encoded}/{path_encoded}"
+        )
+
+    for candidate in candidates:
+        try:
+            r = requests.get(
+                candidate, stream=True, timeout=12,
+                headers={"User-Agent": "RadioLuzGospel/12.44"},
+            )
+            status = r.status_code
+            content_type = (r.headers.get("Content-Type") or "").lower()
+            r.close()
+            if status == 200 and content_type.startswith("image/"):
+                print(f"✓ Fallback: imagem institucional encontrada: {candidate}")
+                _fallback_image_url_cache = candidate
+                return candidate
+            print(f"⚠ Fallback: imagem não acessível ({status}, {content_type}): {candidate}")
+        except Exception as exc:
+            print(f"⚠ Fallback: erro ao validar imagem: {exc}")
+
+    _fallback_image_url_cache = ""
+    return ""
+
+
+# ============================================================
 # GERAÇÃO DE IMAGEM POR IA (Pollinations)
 # ============================================================
 
 def _build_image_prompt(article, generated):
-    """
-    Constrói um prompt em inglês para a Pollinations, sempre dentro
-    do universo gospel. Usa o prompt sugerido pelo Gemini se disponível.
-    """
     base = (generated.get("prompt_imagem", "") or "").strip()
     if not base:
-        # Fallback: usa título como referência
         base = article.get("title", "") or generated.get("titulo", "")
 
-    # Garante que o estilo gospel esteja presente
     style_suffix = (
         "photorealistic, cinematic photography, warm golden lighting, "
         "christian gospel atmosphere, church setting, worship mood, "
@@ -495,10 +539,6 @@ def _build_image_prompt(article, generated):
 
 
 def generate_image_url(prompt):
-    """
-    Gera URL pública da Pollinations para o prompt dado.
-    Retorna URL (string) ou "" se falhar.
-    """
     if not POLLINATIONS_ENABLED or not prompt:
         return ""
     try:
@@ -510,7 +550,6 @@ def generate_image_url(prompt):
             f"&seed={seed}&model=flux&nologo=true"
         )
         print(f"Imagem: solicitando geração (Pollinations)...")
-        # Valida que a imagem existe e é PNG/JPEG
         r = requests.get(url, stream=True, timeout=IMAGE_TIMEOUT)
         status = r.status_code
         content_type = (r.headers.get("Content-Type") or "").lower()
@@ -525,10 +564,6 @@ def generate_image_url(prompt):
 
 
 def apply_logo_watermark(image_url):
-    """
-    Aplica o logo pequeno no topo central via QuickChart Watermark.
-    Se não houver logo público, devolve a imagem original sem marca.
-    """
     if not image_url:
         return image_url
     logo_url = get_logo_public_url()
@@ -546,7 +581,6 @@ def apply_logo_watermark(image_url):
             f"&opacity={LOGO_OPACITY}"
             f"&margin={LOGO_MARGIN}"
         )
-        # Valida que o QuickChart gerou o PNG com marca
         r = requests.get(watermark_url, stream=True, timeout=IMAGE_TIMEOUT)
         status = r.status_code
         content_type = (r.headers.get("Content-Type") or "").lower()
@@ -561,14 +595,6 @@ def apply_logo_watermark(image_url):
 
 
 def build_final_image(article, generated):
-    """
-    Pipeline completo:
-    1. Gera imagem por IA (Pollinations).
-    2. Aplica marca d'água (QuickChart).
-    3. Se falhar em qualquer etapa, retorna ("", "fallback") para o chamador
-       decidir usar a imagem original.
-    Retorna (url_final, origem).
-    """
     prompt = _build_image_prompt(article, generated)
     ai_url = generate_image_url(prompt)
     if not ai_url:
@@ -1277,14 +1303,18 @@ def main():
                 break
             continue
 
-        # ===== Geração de imagem por IA + marca d'água =====
         final_image, image_origin = build_final_image(article, generated)
 
         if not final_image:
-            # Fallback: imagem original da fonte
-            print("⚠ Imagem: IA falhou; usando imagem original da fonte como fallback.")
-            final_image = article["image"]
-            image_origin = "Fallback: imagem original da fonte"
+            fallback_url = get_fallback_image_url()
+            if fallback_url:
+                print("⚠ Imagem: IA falhou; usando imagem institucional como fallback.")
+                final_image = fallback_url
+                image_origin = "Fallback: imagem institucional Rádio Luz Gospel"
+            else:
+                print("⚠ Fallback: imagem institucional indisponível; usando imagem original da fonte.")
+                final_image = article["image"]
+                image_origin = "Fallback: imagem original da fonte"
 
         print(f"✓ Imagem final: {image_origin}")
 
@@ -1656,70 +1686,6 @@ def telegram_promote(post, source_name_text):
     return False
 
 
-def x_promote(post, source_name_text):
-    print("▶ X: iniciando publicação...")
-    if not X_ENABLED:
-        print("⚠ Divulgação: X desativado (X_ENABLED=false)")
-        return False
-    if not X_CLIENT_ID or not X_CLIENT_SECRET or not X_REFRESH_TOKEN:
-        print("⚠ Divulgação: X não configurado. Verifique X_CLIENT_ID, X_CLIENT_SECRET e X_REFRESH_TOKEN.")
-        return False
-    url = promotion_url(post.get("url", ""))
-    if not url:
-        print("⚠ Divulgação: X não recebeu uma URL válida para a matéria.")
-        return False
-
-    title = re.sub(r"\s+", " ", str(post.get("title", "") or "")).strip()
-    prefix = "📰 "
-    middle = "\n\n🎵 Leia a matéria completa na Rádio Luz Gospel:\n"
-    suffix = "\n\n#RadioLuzGospel #NoticiasGospel"
-    max_text_len = 280
-    available_title = max_text_len - len(prefix) - len(middle) - len(url) - len(suffix)
-    if available_title < 1:
-        print("⚠ Divulgação: X não conseguiu montar o texto dentro do limite.")
-        return False
-    if len(title) > available_title:
-        title = title[:max(1, available_title - 1)].rstrip() + "…"
-    text = f"{prefix}{title}{middle}{url}{suffix}"
-
-    try:
-        token_response = requests.post(
-            "https://api.x.com/2/oauth2/token",
-            data={"refresh_token": X_REFRESH_TOKEN, "grant_type": "refresh_token"},
-            auth=(X_CLIENT_ID, X_CLIENT_SECRET),
-            timeout=TIMEOUT,
-        )
-        if not token_response.ok:
-            print(f"⚠ Divulgação: falha ao renovar token X HTTP {token_response.status_code}: {token_response.text[:500]}")
-            return False
-        access_token = token_response.json().get("access_token", "")
-        if not access_token:
-            print("⚠ Divulgação: X não retornou access_token.")
-            return False
-
-        r = requests.post(
-            "https://api.x.com/2/tweets",
-            json={"text": text},
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=TIMEOUT,
-        )
-        if r.ok:
-            tweet_id = ""
-            try:
-                tweet_id = str(r.json().get("data", {}).get("id", "") or "")
-            except Exception:
-                pass
-            if tweet_id:
-                print(f"✓ Divulgação: publicada no X (ID {tweet_id})")
-            else:
-                print("✓ Divulgação: publicada no X")
-            return True
-        print(f"⚠ Divulgação: X HTTP {r.status_code}: {r.text[:500]}")
-    except Exception as e:
-        print("⚠ Divulgação: erro no X:", repr(e))
-    return False
-
-
 def source_name(url):
     host = urlparse(url or "").netloc.lower()
     mapping = (
@@ -1766,12 +1732,11 @@ def promote_new_posts(before_urls):
         telegram_promote(post, source_text)
         facebook_promote(post, source_text)
         instagram_promote(post, source_text)
-        x_promote(post, source_text)
     except Exception as exc:
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.42 ATIVA: imagem gerada por IA (Pollinations) + marca d'água (QuickChart) | fallback para imagem original | UAU Gospel removida | prompt IA menos restritivo | Spotify após 2º parágrafo | sem Fonte/link no final")
+print("VERSÃO 12.44 ATIVA: imagem IA (Pollinations) + logo (QuickChart) | fallback institucional bot/radio_luz_gospel_fallback.png | X/Twitter removido | UAU Gospel removida | Spotify após 2º parágrafo | sem Fonte/link no final")
 
 _before_urls = set()
 if PROMO_ENABLED:
