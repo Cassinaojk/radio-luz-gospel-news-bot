@@ -48,7 +48,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.40")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.41")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -77,7 +77,7 @@ X_CLIENT_SECRET = os.getenv("X_CLIENT_SECRET", "").strip()
 X_REFRESH_TOKEN = os.getenv("X_REFRESH_TOKEN", "").strip()
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
-# ===== Chaves de bancos de imagens (opcionais) =====
+# Chaves de bancos de imagens (opcionais)
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
 
@@ -114,6 +114,7 @@ MUSIC_STRONG_TERMS = (
     "apresentacao musical", "agenda de shows", "palco",
     "ingressos", "bilheteria", "ao vivo", "feat", "featuring",
     "playlist", "cover musical", "novo projeto musical",
+    "cronograma de shows", "turnê", "turnê nacional",
 )
 MUSIC_SUPPORT_TERMS = (
     "cantor", "cantora", "artista", "banda", "dupla", "musico",
@@ -159,24 +160,80 @@ def is_music_related(article=None, generated=None, raw_text=""):
 def is_music_article(article):
     return is_music_related(article=article)
 
+# ===== Fontes (UAU Gospel removida) =====
 SOURCES = [
-    {"nome": "Fuxico Gospel", "url": "https://www.fuxicogospel.com.br/",
-     "feeds": ["https://www.fuxicogospel.com.br/feed/", "https://www.fuxicogospel.com.br/feed"],
-     "music_page": False},
-    {"nome": "News Gospel", "url": "https://www.newsgospel.com.br/",
-     "feeds": ["https://www.newsgospel.com.br/feed/"], "music_page": True},
-    {"nome": "UAU Gospel", "url": "https://www.uaugospel.com.br/",
-     "feeds": ["https://www.uaugospel.com.br/feed/"], "music_page": True},
-    {"nome": "Folha Gospel - Música", "url": "https://folhagospel.com/musica/",
-     "feeds": [], "section_only": True, "music_page": True, "path_prefix": ""},
-    {"nome": "Guiame - Música", "url": "https://guiame.com.br/musica",
-     "feeds": [], "section_only": True, "music_page": True, "path_prefix": "/musica"},
-    {"nome": "Gospel Mais", "url": "https://gospelmais.com/",
-     "feeds": ["https://gospelmais.com/feed/"], "music_page": True},
-    {"nome": "Exibir Gospel", "url": "https://exibirgospel.com.br/",
-     "feeds": ["https://exibirgospel.com.br/feed/"], "music_page": True},
-    {"nome": "iGospel", "url": "https://www.igospel.org.br/",
-     "feeds": ["https://www.igospel.org.br/feed/"], "music_page": True},
+    {
+        "nome": "Fuxico Gospel",
+        "url": "https://www.fuxicogospel.com.br/",
+        "feeds": [
+            "https://www.fuxicogospel.com.br/feed/",
+            "https://www.fuxicogospel.com.br/feed",
+        ],
+        "music_page": False,
+    },
+    {
+        "nome": "News Gospel",
+        "url": "https://www.newsgospel.com.br/",
+        "feeds": [
+            "https://www.newsgospel.com.br/feed/",
+            "https://www.newsgospel.com.br/feed",
+            "https://newsgospel.com.br/feed/",
+            "https://newsgospel.com.br/blog/feed/",
+        ],
+        "music_page": True,
+    },
+    {
+        "nome": "Folha Gospel - Música",
+        "url": "https://folhagospel.com/musica/",
+        "feeds": [
+            "https://folhagospel.com/feed/",
+            "https://folhagospel.com/musica/feed/",
+        ],
+        "section_only": True,
+        "music_page": True,
+        "path_prefix": "",
+    },
+    {
+        "nome": "Guiame - Música",
+        "url": "https://guiame.com.br/musica",
+        "feeds": [
+            "https://guiame.com.br/rss.xml",
+            "https://guiame.com.br/feed/",
+        ],
+        "section_only": True,
+        "music_page": True,
+        "path_prefix": "/musica",
+    },
+    {
+        "nome": "Gospel Mais",
+        "url": "https://gospelmais.com/",
+        "feeds": [
+            "https://gospelmais.com/feed/",
+            "https://gospelmais.com/feed",
+            "https://www.gospelmais.com/feed/",
+            "https://gospelmais.com/feed/?post_type=post",
+        ],
+        "music_page": True,
+    },
+    {
+        "nome": "Exibir Gospel",
+        "url": "https://exibirgospel.com.br/",
+        "feeds": [
+            "https://exibirgospel.com.br/feed/",
+            "https://exibirgospel.com.br/feed",
+        ],
+        "music_page": True,
+    },
+    {
+        "nome": "iGospel",
+        "url": "https://www.igospel.org.br/",
+        "feeds": [
+            "https://www.igospel.org.br/feed/",
+            "https://www.igospel.org.br/feed",
+            "https://igospel.org.br/feed/",
+        ],
+        "music_page": True,
+    },
 ]
 
 BAD_PATHS = (
@@ -193,7 +250,7 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.40)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.41)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -344,7 +401,7 @@ def videos(x):
 
 
 # ============================================================
-# BUSCA DE IMAGEM SUBSTITUTA (Wikimedia + Pexels + Pixabay)
+# BUSCA DE IMAGEM SUBSTITUTA
 # ============================================================
 
 _NO_ATTRIBUTION_LICENSES = (
@@ -353,7 +410,6 @@ _NO_ATTRIBUTION_LICENSES = (
 )
 
 def _wikimedia_search(query, limit=15):
-    """Busca imagens no Wikimedia Commons. Prioriza licenças sem atribuição."""
     if not query:
         return ""
     url = "https://commons.wikimedia.org/w/api.php"
@@ -371,7 +427,7 @@ def _wikimedia_search(query, limit=15):
     try:
         r = requests.get(
             url, params=params, timeout=TIMEOUT,
-            headers={"User-Agent": "RadioLuzGospelBot/12.40 (image search)"},
+            headers={"User-Agent": "RadioLuzGospelBot/12.41 (image search)"},
         )
         if r.status_code != 200:
             print(f"⚠ Imagem: Wikimedia HTTP {r.status_code}")
@@ -410,7 +466,6 @@ def _wikimedia_search(query, limit=15):
             print(f"✓ Imagem: Wikimedia com licença sem atribuição ({chosen[1]}): {chosen[0][:80]}...")
             return chosen[0]
         if fallback:
-            # Mesmo exigindo atribuição, usamos em comentário HTML invisível.
             chosen = fallback[0]
             print(f"⚠ Imagem: Wikimedia somente com licença que pede atribuição ({chosen[1]}); usando mesmo assim com crédito em comentário invisível.")
             return chosen[0]
@@ -475,9 +530,8 @@ def _pixabay_search(query):
 
 
 def _theme_keywords(article):
-    """Palavras-chave temáticas quando não há artista específico."""
     text = _music_norm(article.get("title", "") + " " + article.get("text", ""))
-    if any(x in text for x in ("turne", "turnê", "show", "shows", "concerto", "palco", "festival")):
+    if any(x in text for x in ("turne", "show", "shows", "concerto", "palco", "festival")):
         return "gospel concert"
     if any(x in text for x in ("album", "single", "ep", "gravacao", "estudio")):
         return "gospel music studio"
@@ -487,16 +541,6 @@ def _theme_keywords(article):
 
 
 def find_substitute_image(article, subject_name=""):
-    """
-    Hierarquia:
-    1. Wikimedia com o nome do artista/banda (prioriza licença sem atribuição)
-    2. Pexels com o nome do artista/banda
-    3. Pixabay com o nome do artista/banda
-    4. Wikimedia com palavra-chave temática
-    5. Pexels com palavra-chave temática
-    6. Pixabay com palavra-chave temática
-    Retorna (url, origem_descricao) ou ("", "").
-    """
     global _image_provider_logged
     if not _image_provider_logged:
         print(
@@ -598,7 +642,7 @@ def get_article(url):
         "url": normalize_url(url),
         "title": title,
         "date": d,
-        "image": img,               # imagem original da fonte (fallback)
+        "image": img,
         "text": text[:16000],
         "videos": vv,
     }
@@ -608,6 +652,18 @@ def links(source):
     out = []
     seen = set()
     source_host = urlparse(source["url"]).netloc.lower()
+
+    # Normaliza host removendo www. para comparação
+    def host_matches(u):
+        h = urlparse(u).netloc.lower()
+        if h == source_host:
+            return True
+        if h.endswith("." + source_host):
+            return True
+        # Comparação sem www.
+        h_no_www = h.replace("www.", "", 1)
+        s_no_www = source_host.replace("www.", "", 1)
+        return h_no_www == s_no_www or h_no_www.endswith("." + s_no_www)
 
     for feed in source["feeds"]:
         x = soup(feed, True)
@@ -621,8 +677,7 @@ def links(source):
             u = normalize_url(u)
             if not u or bad_url(u):
                 continue
-            host = urlparse(u).netloc.lower()
-            if host != source_host and not host.endswith("." + source_host):
+            if not host_matches(u):
                 continue
             if u not in seen:
                 seen.add(u)
@@ -635,8 +690,7 @@ def links(source):
             u = normalize_url(u)
             if bad_url(u):
                 continue
-            host = urlparse(u).netloc.lower()
-            if host != source_host and not host.endswith("." + source_host):
+            if not host_matches(u):
                 continue
             if u not in seen:
                 seen.add(u)
@@ -944,9 +998,23 @@ Crie título, resumo e matéria em português do Brasil.
 A matéria deve ter aproximadamente 700 a 1200 palavras.
 Não diga que foi escrita por IA.
 
-REGRAS:
-- publicar=true somente se o assunto principal for claramente musical;
-- se não for música ou não houver informação suficiente, use publicar=false;
+CRITÉRIO DE PUBLICAÇÃO (leia com atenção):
+- Marque publicar=true quando houver QUALQUER elemento musical claro na
+  matéria, mesmo que o foco principal seja agenda, cronograma de shows,
+  turnê, divulgação de datas, anúncio de apresentações, festival, show
+  beneficente, participação em evento musical, lançamento de single,
+  álbum, EP, videoclipe, mudança de formação, entrevista com artista
+  musical ou qualquer outro assunto diretamente ligado a música.
+- Cronogramas de shows, turnês nacionais e divulgação de datas SÃO
+  matérias musicais e devem ser publicadas (publicar=true).
+- Marque publicar=false SOMENTE quando a matéria NÃO tiver nenhuma
+  relação com música (ex.: política, economia, esporte, religião sem
+  elemento musical, comportamento, tecnologia, saúde).
+- Se a matéria citar uma banda, cantor, cantora, duo, grupo musical,
+  festival, show, turnê, álbum, single, EP ou videoclipe, é música.
+- Na dúvida entre publicar e não publicar, PREFIRA publicar=true.
+
+OUTRAS REGRAS:
 - título novo e jornalístico;
 - resumo de 2 a 3 frases;
 - não copiar frases ou parágrafos da fonte;
@@ -1136,7 +1204,6 @@ def html(article, generated, final_image="", image_origin=""):
             'loading="lazy"></iframe></p>'
         )
 
-    # Comentários HTML invisíveis: rastreio interno.
     source_marker = f"<!-- RADIO_LUZ_GOSPEL_SOURCE_URL: {safe_source_url} -->"
     image_marker = ""
     if image_origin:
@@ -1146,7 +1213,7 @@ def html(article, generated, final_image="", image_origin=""):
 
 
 def main():
-    print("Fontes: Fuxico + News Gospel + UAU + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel | /musicas por conteúdo")
+    print("Fontes: Fuxico + News Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel | /musicas por conteúdo")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls = existing(api)
@@ -1199,7 +1266,6 @@ def main():
                 break
             continue
 
-        # ===== Busca de imagem substituta (opção b: se não achar, pula) =====
         subject = generated.get("assunto_principal", "") or ""
         substitute, origin = find_substitute_image(article, subject)
 
@@ -1648,7 +1714,6 @@ def source_name(url):
     mapping = (
         ("fuxicogospel.com.br", "Fuxico Gospel"),
         ("newsgospel.com.br", "News Gospel"),
-        ("uaugospel.com.br", "UAU Gospel"),
         ("folhagospel.com", "Folha Gospel - Música"),
         ("guiame.com.br", "Guiame - Música"),
         ("gospelmais.com", "Gospel Mais"),
@@ -1695,7 +1760,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.40 ATIVA: imagem substituta (Wikimedia/Pexels/Pixabay) | política b: sem substituta = pula matéria | Spotify após 2º parágrafo | sem Fonte/link no final | filtro musical antes da IA | Instagram/Facebook/Telegram/X")
+print("VERSÃO 12.41 ATIVA: UAU Gospel removida | prompt menos restritivo para matérias musicais | imagem substituta (Wikimedia/Pexels/Pixabay) | política b | Spotify após 2º parágrafo | sem Fonte/link no final")
 
 _before_urls = set()
 if PROMO_ENABLED:
