@@ -18,6 +18,7 @@ def print(*args, **kwargs):
         or message.startswith("Fontes já registradas:")
         or message.startswith("Fontes encontradas:")
         or message.startswith("Novas matérias:")
+        or message.startswith("Puladas:")
         or message == "RESULTADO"
         or message.startswith("Publicações:")
         or message.startswith("Ignoradas:")
@@ -30,6 +31,7 @@ def print(*args, **kwargs):
         or message.startswith("⚠ Gemini:")
         or message.startswith("⚠ Imagem:")
         or message.startswith("⚠ Fallback:")
+        or message.startswith("⚠ Pulada:")
         or message.startswith("⚠ Divulgação:")
         or message.startswith("✓ Divulgação:")
         or message.startswith("⚠ Instagram:")
@@ -50,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.44")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.45")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -94,8 +96,8 @@ FALLBACK_IMAGE_PATH_IN_REPO = os.getenv(
 ).strip()
 
 # Limites
-MAX_POSTS_PER_RUN = 1
-MAX_GEMINI_TEXT_CALLS_PER_RUN = 6
+MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "1"))
+MAX_GEMINI_TEXT_CALLS_PER_RUN = int(os.getenv("MAX_GEMINI_TEXT_CALLS_PER_RUN", "6"))
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 80
@@ -128,6 +130,8 @@ MUSIC_STRONG_TERMS = (
     "ingressos", "bilheteria", "ao vivo", "feat", "featuring",
     "playlist", "cover musical", "novo projeto musical",
     "cronograma de shows", "turnê", "turnê nacional",
+    "louvor", "adoracao", "worship", "gospel music", "musica gospel",
+    "cantor gospel", "cantora gospel", "banda gospel",
 )
 MUSIC_SUPPORT_TERMS = (
     "cantor", "cantora", "artista", "banda", "dupla", "musico",
@@ -172,6 +176,31 @@ def is_music_related(article=None, generated=None, raw_text=""):
 
 def is_music_article(article):
     return is_music_related(article=article)
+
+
+def quick_music_prefilter(article):
+    """
+    Pré-filtro no título e primeiros 400 caracteres do texto.
+    Evita gastar cota do Gemini com matérias claramente não-musicais.
+    Retorna (passou, motivo_se_falhou).
+    """
+    title = _music_norm(article.get("title", ""))
+    head = _music_norm(article.get("text", "")[:400])
+    combined = f"{title} {head}"
+
+    # Se o título já tem termo forte, passa.
+    if any(t in title for t in MUSIC_STRONG_TERMS):
+        return True, ""
+
+    # Se o começo do texto tem termo forte + apoio, passa.
+    strong = sum(1 for t in MUSIC_STRONG_TERMS if t in combined)
+    support = sum(1 for t in MUSIC_SUPPORT_TERMS if t in combined)
+    if strong >= 1 and support >= 1:
+        return True, ""
+
+    # Caso contrário, não é claramente musical — pula sem gastar IA.
+    return False, "sem termos musicais fortes no título/trecho inicial"
+
 
 # ===== Fontes (UAU Gospel removida) =====
 SOURCES = [
@@ -261,7 +290,7 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.44)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.45)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -447,7 +476,7 @@ def get_logo_public_url():
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.44"},
+                headers={"User-Agent": "RadioLuzGospel/12.45"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -497,7 +526,7 @@ def get_fallback_image_url():
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.44"},
+                headers={"User-Agent": "RadioLuzGospel/12.45"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -1023,21 +1052,29 @@ Crie título, resumo e matéria em português do Brasil.
 A matéria deve ter aproximadamente 700 a 1200 palavras.
 Não diga que foi escrita por IA.
 
-CRITÉRIO DE PUBLICAÇÃO (leia com atenção):
-- Marque publicar=true quando houver QUALQUER elemento musical claro na
-  matéria, mesmo que o foco principal seja agenda, cronograma de shows,
-  turnê, divulgação de datas, anúncio de apresentações, festival, show
-  beneficente, participação em evento musical, lançamento de single,
-  álbum, EP, videoclipe, mudança de formação, entrevista com artista
-  musical ou qualquer outro assunto diretamente ligado a música.
-- Cronogramas de shows, turnês nacionais e divulgação de datas SÃO
-  matérias musicais e devem ser publicadas (publicar=true).
-- Marque publicar=false SOMENTE quando a matéria NÃO tiver nenhuma
-  relação com música (ex.: política, economia, esporte, religião sem
-  elemento musical, comportamento, tecnologia, saúde).
-- Se a matéria citar uma banda, cantor, cantora, duo, grupo musical,
-  festival, show, turnê, álbum, single, EP ou videoclipe, é música.
-- Na dúvida entre publicar e não publicar, PREFIRA publicar=true.
+CRITÉRIO DE PUBLICAÇÃO (leia com atenção — a regra é PERMISSIVA):
+Você DEVE marcar publicar=true sempre que a matéria tiver QUALQUER
+elemento musical, gospel ou de louvor. Exemplos que contam como música:
+- lançamento de single, álbum, EP, videoclipe ou DVD;
+- show, turnê, cronograma de shows, agenda de apresentações;
+- festival, concerto, apresentação ao vivo, live;
+- entrevista com cantor, cantora, banda, dupla, músico ou produtor musical;
+- evento gospel com louvor, adoração ou ministração musical;
+- culto, conferência ou congresso com participação musical;
+- mudança de formação, entrada ou saída de integrante de banda;
+- homenagem, prêmio ou indicação envolvendo música gospel;
+- testemunho de artista musical;
+- qualquer menção a banda, cantor, cantora, grupo, duo, coral, ministério
+  de louvor, gravadora, compositor, instrumento, música, canção ou álbum.
+
+Marque publicar=false SOMENTE quando a matéria for claramente de outro
+assunto: política partidária, economia, esporte, saúde, tecnologia,
+comportamento sem relação musical, denúncia policial sem ligação com
+música, ou artigo doutrinário sem qualquer referência a música.
+
+REGRA DE OURO: se houver DÚVIDA, marque publicar=true. O custo de
+publicar uma matéria levemente fora do tema é menor do que o custo de
+perder uma matéria musical legítima.
 
 OUTRAS REGRAS:
 - título novo e jornalístico;
@@ -1260,6 +1297,7 @@ def main():
     candidates = []
     candidate_urls = set()
     source_counts = {}
+    prefiltered_out = 0
 
     for source in SOURCES:
         source_links = links(source)
@@ -1271,12 +1309,19 @@ def main():
             article = get_article(normalized)
             if article:
                 if not is_music_related(article=article):
+                    prefiltered_out += 1
+                    continue
+                passed, reason = quick_music_prefilter(article)
+                if not passed:
+                    prefiltered_out += 1
+                    print(f"⚠ Pulada (pré-filtro): {article['title'][:70]} — {reason}")
                     continue
                 candidate_urls.add(normalized)
                 candidates.append(article)
 
     source_summary = " | ".join(f"{name}: {count}" for name, count in source_counts.items())
     print(f"Fontes encontradas: {source_summary}")
+    print(f"Puladas: {prefiltered_out}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
     print(f"Novas matérias musicais: {len(candidates)}")
@@ -1736,7 +1781,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.44 ATIVA: imagem IA (Pollinations) + logo (QuickChart) | fallback institucional bot/radio_luz_gospel_fallback.png | X/Twitter removido | UAU Gospel removida | Spotify após 2º parágrafo | sem Fonte/link no final")
+print("VERSÃO 12.45 ATIVA: prompt permissivo (Opção A) + pré-filtro Python | imagem IA + logo | fallback institucional | X removido | Spotify após 2º parágrafo")
 
 _before_urls = set()
 if PROMO_ENABLED:
