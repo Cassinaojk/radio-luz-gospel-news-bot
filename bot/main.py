@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.48")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.49")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -77,13 +77,24 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
-# ===== Imagem fixa (a que será usada em TODAS as postagens) =====
-# Caminho do arquivo no repositório GitHub. O arquivo atual tem a
-# extensão duplicada .png.png, então mantemos exatamente esse nome.
-FIXED_IMAGE_PATH_IN_REPO = os.getenv(
-    "FIXED_IMAGE_PATH_IN_REPO",
-    "bot/radio_luz_gospel_fallback.png.png",
-).strip()
+# ===== Sequência de imagens (usadas em ciclo 1, 2, 3... 12, 1, 2, ...) =====
+# Nomes exatos dos arquivos no repositório (pasta bot/Imagens/).
+# O robô escolhe a próxima imagem com base no total de posts já publicados
+# (que ele conta pelos marcadores RADIO_LUZ_GOSPEL_SOURCE_URL).
+IMAGE_FILES = [
+    "bot/Imagens/radioluzgospel1.png",
+    "bot/Imagens/radioluzgospel2.jpg",
+    "bot/Imagens/radioluzgospel3.jpg",
+    "bot/Imagens/radioluzgospel4.jpg",
+    "bot/Imagens/radioluzgospel5.jpg",
+    "bot/Imagens/radioluzgospel6.jpg",
+    "bot/Imagens/radioluzgospel7.jpg",
+    "bot/Imagens/radioluzgospel8.jpg",
+    "bot/Imagens/radioluzgospel9.jpg",
+    "bot/Imagens/radioluzgospel10.jpg",
+    "bot/Imagens/radioluzgospel11.jpg",
+    "bot/Imagens/radioluzgospel12.jpg",
+]
 
 # Limites
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "1"))
@@ -271,12 +282,12 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.48)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.49)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
 _ai_config_logged = False
-_fixed_image_url_cache = None
+_image_url_cache = {}
 
 
 def normalize_url(u):
@@ -383,9 +394,7 @@ def article_date(x):
 
 def image_original(x):
     """
-    Extrai a imagem original da fonte. Mantida apenas para checagem
-    (não é mais usada como imagem de post). Se a fonte não tiver
-    imagem, ainda assim aceitamos a matéria — a imagem fixa será usada.
+    Mantida apenas para compatibilidade. Não é mais usada para o post.
     """
     values = []
     for sel in (
@@ -427,57 +436,77 @@ def videos(x):
 
 
 # ============================================================
-# IMAGEM FIXA (usada em TODAS as postagens)
+# SEQUÊNCIA DE IMAGENS (bot/Imagens/radioluzgospelN)
 # ============================================================
 
-def get_fixed_image_url():
+def resolve_repo_image_url(relative_path):
     """
-    Retorna a URL pública da imagem fixa (hospedada no repositório GitHub).
-    Usa jsDelivr como principal e raw.githubusercontent.com como fallback.
+    Converte o caminho relativo no repositório (ex.: bot/Imagens/x.png)
+    em URL pública (jsDelivr ou raw.githubusercontent.com).
+    Retorna "" se o arquivo não existir.
     """
-    global _fixed_image_url_cache
-    if _fixed_image_url_cache is not None:
-        return _fixed_image_url_cache
-
-    explicit = os.getenv("FIXED_IMAGE_URL", "").strip()
-    if explicit:
-        _fixed_image_url_cache = explicit
-        print(f"✓ Imagem fixa: usando URL explícita: {explicit}")
-        return explicit
+    if not relative_path:
+        return ""
+    if relative_path in _image_url_cache:
+        return _image_url_cache[relative_path]
 
     repository = os.getenv("GITHUB_REPOSITORY", "").strip()
     branch = os.getenv("GITHUB_REF_NAME", "").strip() or "main"
-    candidates = []
-    if repository:
-        repo_encoded = quote(repository, safe="/")
-        branch_encoded = quote(branch, safe="")
-        path_encoded = quote(FIXED_IMAGE_PATH_IN_REPO, safe="/")
-        candidates.append(
-            f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/{path_encoded}"
-        )
-        candidates.append(
-            f"https://raw.githubusercontent.com/{repo_encoded}/{branch_encoded}/{path_encoded}"
-        )
+    if not repository:
+        _image_url_cache[relative_path] = ""
+        return ""
+
+    repo_encoded = quote(repository, safe="/")
+    branch_encoded = quote(branch, safe="")
+    path_encoded = quote(relative_path, safe="/")
+
+    candidates = [
+        f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/{path_encoded}",
+        f"https://raw.githubusercontent.com/{repo_encoded}/{branch_encoded}/{path_encoded}",
+    ]
 
     for candidate in candidates:
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.48"},
+                headers={"User-Agent": "RadioLuzGospel/12.49"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
             if status == 200 and content_type.startswith("image/"):
-                print(f"✓ Imagem fixa: encontrada em {candidate}")
-                _fixed_image_url_cache = candidate
+                print(f"✓ Imagem sequencial: {relative_path} → {candidate}")
+                _image_url_cache[relative_path] = candidate
                 return candidate
-            print(f"⚠ Imagem fixa: não acessível ({status}, {content_type}): {candidate}")
+            print(f"⚠ Imagem sequencial indisponível ({status}, {content_type}): {candidate}")
         except Exception as exc:
-            print(f"⚠ Imagem fixa: erro ao validar: {exc}")
+            print(f"⚠ Imagem sequencial: erro ao validar {candidate}: {exc}")
 
-    _fixed_image_url_cache = ""
+    _image_url_cache[relative_path] = ""
     return ""
+
+
+def pick_next_image_url(posts_count):
+    """
+    Escolhe a próxima imagem da sequência.
+    - posts_count = quantidade de posts do robô já publicados no blog.
+    - A próxima imagem é (posts_count % 12) + 1 (1-based), depois converte
+      para o índice da lista (0-based).
+    - Se a imagem escolhida não puder ser acessada, tenta a próxima
+      (até dar a volta na lista toda).
+    """
+    if not IMAGE_FILES:
+        return "", ""
+    total = len(IMAGE_FILES)
+    start_idx = posts_count % total
+
+    for offset in range(total):
+        idx = (start_idx + offset) % total
+        rel = IMAGE_FILES[idx]
+        url = resolve_repo_image_url(rel)
+        if url:
+            return url, rel
+    return "", ""
 
 
 # ============================================================
@@ -514,7 +543,6 @@ def get_article(url):
     else:
         print("Data não identificada. Aceitando para análise.")
 
-    # A imagem original NÃO é mais obrigatória — usamos a imagem fixa.
     img = image_original(x) or ""
 
     box = x.find("article") or x.find("main") or x
@@ -542,7 +570,7 @@ def get_article(url):
         "url": normalize_url(url),
         "title": title,
         "date": d,
-        "image": img,  # guardado apenas como referência interna, não usado no post
+        "image": img,  # mantido só como referência, não usado no post
         "text": text[:16000],
         "videos": vv,
     }
@@ -647,6 +675,36 @@ def existing(api, show_log=True):
         print("Posts existentes no Blogger:", len(blog_urls))
         print("Fontes já registradas:", len(source_urls))
     return blog_urls, source_urls
+
+
+def count_bot_posts(api):
+    """
+    Conta quantos posts do robô existem no blog (marcados por
+    RADIO_LUZ_GOSPEL_SOURCE_URL). Usado para escolher a próxima imagem.
+    """
+    count = 0
+    token = None
+    try:
+        while True:
+            kwargs = {
+                "blogId": BLOGGER_BLOG_ID,
+                "maxResults": 500,
+                "fetchBodies": True,
+            }
+            if token:
+                kwargs["pageToken"] = token
+            data = api.posts().list(**kwargs).execute()
+            for post in data.get("items", []):
+                content = post.get("content", "") or ""
+                if re.search(r"RADIO_LUZ_GOSPEL_SOURCE_URL:", content, flags=re.I):
+                    count += 1
+            token = data.get("nextPageToken")
+            if not token:
+                break
+    except Exception as e:
+        print("Erro ao contar posts do robô:", e)
+    print(f"Posts do robô já publicados (contagem para sequência de imagens): {count}")
+    return count
 
 
 def update_existing_music_labels(api):
@@ -1121,15 +1179,9 @@ def main():
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls = existing(api)
+    posts_count = count_bot_posts(api)
 
     update_existing_music_labels(api)
-
-    # ===== Imagem fixa (a mesma para todas as postagens) =====
-    fixed_image = get_fixed_image_url()
-    if not fixed_image:
-        print("⚠ Imagem fixa: não foi possível localizar a imagem no repositório.")
-        print("⚠ Verifique se o arquivo existe em 'bot/radio_luz_gospel_fallback.png.png'.")
-        return
 
     candidates = []
     candidate_urls = set()
@@ -1185,10 +1237,13 @@ def main():
                 break
             continue
 
-        # ===== Imagem fixa em TODODAS as postagens =====
-        final_image = fixed_image
-        image_origin = "Imagem fixa institucional (repositório)"
-
+        # ===== Escolhe a próxima imagem da sequência (1, 2, 3... 12, 1, 2...) =====
+        final_image, chosen_file = pick_next_image_url(posts_count + published)
+        if not final_image:
+            print("⚠ Imagem sequencial: nenhuma imagem acessível na pasta bot/Imagens/.")
+            ignored += 1
+            continue
+        image_origin = f"Sequência: {chosen_file}"
         print(f"✓ Imagem final: {image_origin}")
 
         try:
@@ -1644,7 +1699,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.48 ATIVA: imagem fixa em todas as postagens (bot/radio_luz_gospel_fallback.png.png) | sem geração por IA | sem imagem da fonte | Spotify após 2º parágrafo | sem Fonte/link no final")
+print("VERSÃO 12.49 ATIVA: sequência cíclica de 12 imagens em bot/Imagens/ (radioluzgospel1 a radioluzgospel12) | Spotify após 2º parágrafo | sem Fonte/link no final")
 
 _before_urls = set()
 if PROMO_ENABLED:
