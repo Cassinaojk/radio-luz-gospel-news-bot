@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.47")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.48")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -77,23 +77,12 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
-# ===== Geração de imagem por IA (Pollinations) =====
-POLLINATIONS_BASE = "https://image.pollinations.ai/prompt/"
-POLLINATIONS_ENABLED = os.getenv("POLLINATIONS_ENABLED", "true").lower() in ("1", "true", "yes", "sim")
-IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "1200"))
-IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "675"))
-
-# ===== Logo para marca d'água (DESATIVADO por decisão do usuário) =====
-WATERMARK_ENABLED = os.getenv("WATERMARK_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
-LOGO_PATH_IN_REPO = os.getenv("LOGO_PATH_IN_REPO", "bot/radio_luz_gospel_logo.png").strip()
-LOGO_MARK_RATIO = float(os.getenv("LOGO_MARK_RATIO", "0.08"))
-LOGO_OPACITY = float(os.getenv("LOGO_OPACITY", "0.85"))
-LOGO_MARGIN = int(os.getenv("LOGO_MARGIN", "20"))
-
-# ===== Imagem de fallback (institucional) =====
-FALLBACK_IMAGE_PATH_IN_REPO = os.getenv(
-    "FALLBACK_IMAGE_PATH_IN_REPO",
-    "bot/radio_luz_gospel_fallback.png",
+# ===== Imagem fixa (a que será usada em TODAS as postagens) =====
+# Caminho do arquivo no repositório GitHub. O arquivo atual tem a
+# extensão duplicada .png.png, então mantemos exatamente esse nome.
+FIXED_IMAGE_PATH_IN_REPO = os.getenv(
+    "FIXED_IMAGE_PATH_IN_REPO",
+    "bot/radio_luz_gospel_fallback.png.png",
 ).strip()
 
 # Limites
@@ -108,7 +97,6 @@ MAX_AGE_DAYS = 3650
 MIN_SOURCE_CHARS = 700
 MIN_SOURCE_PARAGRAPHS = 4
 TIMEOUT = 25
-IMAGE_TIMEOUT = 60
 
 GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.6-flash")
@@ -283,13 +271,12 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.47)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.48)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
 _ai_config_logged = False
-_image_logo_url_cache = None
-_fallback_image_url_cache = None
+_fixed_image_url_cache = None
 
 
 def normalize_url(u):
@@ -395,6 +382,11 @@ def article_date(x):
 
 
 def image_original(x):
+    """
+    Extrai a imagem original da fonte. Mantida apenas para checagem
+    (não é mais usada como imagem de post). Se a fonte não tiver
+    imagem, ainda assim aceitamos a matéria — a imagem fixa será usada.
+    """
     values = []
     for sel in (
         'meta[property="og:image"]',
@@ -435,70 +427,22 @@ def videos(x):
 
 
 # ============================================================
-# LOGO PARA MARCA D'ÁGUA (mantido apenas para uso opcional)
+# IMAGEM FIXA (usada em TODAS as postagens)
 # ============================================================
 
-def get_logo_public_url():
-    global _image_logo_url_cache
-    if _image_logo_url_cache is not None:
-        return _image_logo_url_cache
+def get_fixed_image_url():
+    """
+    Retorna a URL pública da imagem fixa (hospedada no repositório GitHub).
+    Usa jsDelivr como principal e raw.githubusercontent.com como fallback.
+    """
+    global _fixed_image_url_cache
+    if _fixed_image_url_cache is not None:
+        return _fixed_image_url_cache
 
-    explicit = os.getenv("INSTAGRAM_LOGO_URL", "").strip()
-    candidates = []
+    explicit = os.getenv("FIXED_IMAGE_URL", "").strip()
     if explicit:
-        candidates.append(explicit)
-
-    repository = os.getenv("GITHUB_REPOSITORY", "").strip()
-    branch = os.getenv("GITHUB_REF_NAME", "").strip() or "main"
-    if repository:
-        repo_encoded = quote(repository, safe="/")
-        branch_encoded = quote(branch, safe="")
-        logo_encoded = quote(LOGO_PATH_IN_REPO, safe="/")
-        candidates.append(
-            f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/{logo_encoded}"
-        )
-        candidates.append(
-            f"https://raw.githubusercontent.com/{repo_encoded}/{branch_encoded}/{logo_encoded}"
-        )
-
-    seen = set()
-    for candidate in candidates:
-        if not candidate or candidate in seen:
-            continue
-        seen.add(candidate)
-        try:
-            r = requests.get(
-                candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.47"},
-            )
-            status = r.status_code
-            content_type = (r.headers.get("Content-Type") or "").lower()
-            r.close()
-            if status == 200 and content_type.startswith("image/"):
-                print(f"✓ Logo público encontrado: {candidate}")
-                _image_logo_url_cache = candidate
-                return candidate
-            print(f"⚠ Logo não acessível ({status}, {content_type}): {candidate}")
-        except Exception as exc:
-            print(f"⚠ Erro ao validar logo: {exc}")
-
-    _image_logo_url_cache = ""
-    return ""
-
-
-# ============================================================
-# IMAGEM DE FALLBACK (INSTITUCIONAL)
-# ============================================================
-
-def get_fallback_image_url():
-    global _fallback_image_url_cache
-    if _fallback_image_url_cache is not None:
-        return _fallback_image_url_cache
-
-    explicit = os.getenv("FALLBACK_IMAGE_URL", "").strip()
-    if explicit:
-        _fallback_image_url_cache = explicit
-        print(f"✓ Fallback: usando URL explícita: {explicit}")
+        _fixed_image_url_cache = explicit
+        print(f"✓ Imagem fixa: usando URL explícita: {explicit}")
         return explicit
 
     repository = os.getenv("GITHUB_REPOSITORY", "").strip()
@@ -507,7 +451,7 @@ def get_fallback_image_url():
     if repository:
         repo_encoded = quote(repository, safe="/")
         branch_encoded = quote(branch, safe="")
-        path_encoded = quote(FALLBACK_IMAGE_PATH_IN_REPO, safe="/")
+        path_encoded = quote(FIXED_IMAGE_PATH_IN_REPO, safe="/")
         candidates.append(
             f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/{path_encoded}"
         )
@@ -519,111 +463,21 @@ def get_fallback_image_url():
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.47"},
+                headers={"User-Agent": "RadioLuzGospel/12.48"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
             if status == 200 and content_type.startswith("image/"):
-                print(f"✓ Fallback: imagem institucional encontrada: {candidate}")
-                _fallback_image_url_cache = candidate
+                print(f"✓ Imagem fixa: encontrada em {candidate}")
+                _fixed_image_url_cache = candidate
                 return candidate
-            print(f"⚠ Fallback: imagem não acessível ({status}, {content_type}): {candidate}")
+            print(f"⚠ Imagem fixa: não acessível ({status}, {content_type}): {candidate}")
         except Exception as exc:
-            print(f"⚠ Fallback: erro ao validar imagem: {exc}")
+            print(f"⚠ Imagem fixa: erro ao validar: {exc}")
 
-    _fallback_image_url_cache = ""
+    _fixed_image_url_cache = ""
     return ""
-
-
-# ============================================================
-# GERAÇÃO DE IMAGEM POR IA (Pollinations)
-# ============================================================
-
-def _build_image_prompt(article, generated):
-    base = (generated.get("prompt_imagem", "") or "").strip()
-    if not base:
-        base = article.get("title", "") or generated.get("titulo", "")
-
-    style_suffix = (
-        "photorealistic, cinematic photography, warm stage lighting, "
-        "christian gospel atmosphere, professional concert photography, "
-        "shallow depth of field, high detail, 16:9 aspect ratio"
-    )
-    if "photorealistic" not in base.lower() and "photo" not in base.lower():
-        prompt = f"{base}, {style_suffix}"
-    else:
-        prompt = base
-
-    prompt = re.sub(r"\s+", " ", prompt).strip()[:900]
-    return prompt
-
-
-def generate_image_url(prompt):
-    if not POLLINATIONS_ENABLED or not prompt:
-        return ""
-    try:
-        encoded = quote(prompt, safe="")
-        seed = random.randint(1, 999999)
-        url = (
-            f"{POLLINATIONS_BASE}{encoded}"
-            f"?width={IMAGE_WIDTH}&height={IMAGE_HEIGHT}"
-            f"&seed={seed}&model=flux&nologo=true"
-        )
-        print(f"Imagem: solicitando geração (Pollinations)...")
-        r = requests.get(url, stream=True, timeout=IMAGE_TIMEOUT)
-        status = r.status_code
-        content_type = (r.headers.get("Content-Type") or "").lower()
-        r.close()
-        if status == 200 and content_type.startswith("image/"):
-            print(f"✓ Imagem: gerada com sucesso.")
-            return url
-        print(f"⚠ Imagem: Pollinations HTTP {status} ({content_type})")
-    except Exception as e:
-        print(f"⚠ Imagem: erro na geração Pollinations: {e}")
-    return ""
-
-
-def apply_logo_watermark(image_url):
-    if not image_url or not WATERMARK_ENABLED:
-        return image_url
-    logo_url = get_logo_public_url()
-    if not logo_url:
-        print("⚠ Imagem: logo público indisponível; mantendo imagem sem marca.")
-        return image_url
-
-    try:
-        watermark_url = (
-            "https://quickchart.io/watermark?"
-            f"mainImageUrl={quote(image_url, safe='')}"
-            f"&markImageUrl={quote(logo_url, safe='')}"
-            f"&markRatio={LOGO_MARK_RATIO}"
-            "&position=topMiddle"
-            f"&opacity={LOGO_OPACITY}"
-            f"&margin={LOGO_MARGIN}"
-        )
-        r = requests.get(watermark_url, stream=True, timeout=IMAGE_TIMEOUT)
-        status = r.status_code
-        content_type = (r.headers.get("Content-Type") or "").lower()
-        r.close()
-        if status == 200 and content_type.split(";", 1)[0].strip() == "image/png":
-            print("✓ Imagem: marca d'água aplicada com sucesso.")
-            return watermark_url
-        print(f"⚠ Imagem: QuickChart watermark HTTP {status} ({content_type})")
-    except Exception as e:
-        print(f"⚠ Imagem: erro ao aplicar marca d'água: {e}")
-    return image_url
-
-
-def build_final_image(article, generated):
-    prompt = _build_image_prompt(article, generated)
-    ai_url = generate_image_url(prompt)
-    if not ai_url:
-        return "", ""
-    final_url = apply_logo_watermark(ai_url)
-    if final_url and final_url != ai_url:
-        return final_url, "Pollinations + marca d'água"
-    return ai_url, "Pollinations (sem logo)"
 
 
 # ============================================================
@@ -660,10 +514,8 @@ def get_article(url):
     else:
         print("Data não identificada. Aceitando para análise.")
 
-    img = image_original(x)
-    if not img:
-        print("Imagem original não encontrada. Pulando.")
-        return None
+    # A imagem original NÃO é mais obrigatória — usamos a imagem fixa.
+    img = image_original(x) or ""
 
     box = x.find("article") or x.find("main") or x
     paragraphs = []
@@ -690,7 +542,7 @@ def get_article(url):
         "url": normalize_url(url),
         "title": title,
         "date": d,
-        "image": img,
+        "image": img,  # guardado apenas como referência interna, não usado no post
         "text": text[:16000],
         "videos": vv,
     }
@@ -1077,31 +929,8 @@ OUTRAS REGRAS:
   "Kim", "Renascer Praise"). Se não houver pessoa ou banda específica,
   deixe string vazia "".
 
-- no campo "prompt_imagem", escreva em INGLÊS um prompt DETALHADO para
-  gerar uma FOTO realista que reproduza o CLIMA VISUAL da matéria,
-  inspirado na cena descrita no texto-fonte. NÃO descreva a pessoa
-  específica da matéria, mas sim a CENA como um todo, com um artista
-  gospel genérico. O prompt DEVE incluir:
-  * tipo de ambiente (church stage, gospel concert, worship service,
-    outdoor festival, recording studio, conference hall, etc.);
-  * pose do artista principal (ex.: "female gospel singer with raised
-    hand in worship", "male singer holding microphone close to mouth",
-    "worship leader kneeling on stage", "singer with arms open wide");
-  * cenário e elementos visuais (illuminated cross, LED panels,
-    screens with abstract graphics, stage curtains, band in background,
-    musical instruments, speakers, audience);
-  * iluminação (warm stage lights, orange and yellow spotlights,
-    purple haze, cinematic backlight, dramatic side lighting);
-  * enquadramento (medium shot, wide shot, low angle, blurred crowd
-    in foreground, shallow depth of field);
-  * estilo fotográfico (professional concert photography,
-    photorealistic, cinematic, high detail, editorial news photo);
-  * NÃO citar nomes de pessoas reais nem pedir rostos específicos;
-  * NÃO reproduzir marcas, logotipos ou textos visíveis;
-  * ter no máximo 80 palavras.
-
 FORMATO:
-{{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"...","prompt_imagem":"..."}}
+{{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"..."}}
 
 TÍTULO ORIGINAL:
 {article['title']}
@@ -1146,7 +975,6 @@ construções das frases. Não repita sequências da fonte.
                 resumo = str(data.get("resumo", "")).strip()
                 materia = str(data.get("materia", "")).strip()
                 assunto = str(data.get("assunto_principal", "")).strip()
-                prompt_imagem = str(data.get("prompt_imagem", "")).strip()
                 if not titulo or not resumo or len(materia) < 700:
                     last_reason = "resposta inválida"
                     print(f"⚠ {provider}: resposta inválida ou curta demais.")
@@ -1165,7 +993,6 @@ construções das frases. Não repita sequências da fonte.
                     "resumo": resumo,
                     "materia": materia,
                     "assunto_principal": assunto,
-                    "prompt_imagem": prompt_imagem,
                 }
             except Exception as exc:
                 if _is_quota_exception(exc):
@@ -1297,6 +1124,13 @@ def main():
 
     update_existing_music_labels(api)
 
+    # ===== Imagem fixa (a mesma para todas as postagens) =====
+    fixed_image = get_fixed_image_url()
+    if not fixed_image:
+        print("⚠ Imagem fixa: não foi possível localizar a imagem no repositório.")
+        print("⚠ Verifique se o arquivo existe em 'bot/radio_luz_gospel_fallback.png.png'.")
+        return
+
     candidates = []
     candidate_urls = set()
     source_counts = {}
@@ -1351,18 +1185,9 @@ def main():
                 break
             continue
 
-        final_image, image_origin = build_final_image(article, generated)
-
-        if not final_image:
-            fallback_url = get_fallback_image_url()
-            if fallback_url:
-                print("⚠ Imagem: IA falhou; usando imagem institucional como fallback.")
-                final_image = fallback_url
-                image_origin = "Fallback: imagem institucional Rádio Luz Gospel"
-            else:
-                print("⚠ Fallback: imagem institucional indisponível; usando imagem original da fonte.")
-                final_image = article["image"]
-                image_origin = "Fallback: imagem original da fonte"
+        # ===== Imagem fixa em TODODAS as postagens =====
+        final_image = fixed_image
+        image_origin = "Imagem fixa institucional (repositório)"
 
         print(f"✓ Imagem final: {image_origin}")
 
@@ -1582,7 +1407,7 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
 def instagram_art_url(post):
     image_url = social_image_url(post)
     if not image_url:
-        print("⚠ Instagram: matéria sem imagem original; arte não pode ser criada.")
+        print("⚠ Instagram: matéria sem imagem; arte não pode ser criada.")
         return ""
 
     title = str(post.get("title", "")).strip()
@@ -1819,7 +1644,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.47 ATIVA: prompt de imagem detalhado (clima visual da cena) | logo desativado | Instagram trata 403 anti-spam | prompt permissivo | pré-filtro Python | imagem IA (Pollinations) | fallback institucional | Spotify após 2º parágrafo")
+print("VERSÃO 12.48 ATIVA: imagem fixa em todas as postagens (bot/radio_luz_gospel_fallback.png.png) | sem geração por IA | sem imagem da fonte | Spotify após 2º parágrafo | sem Fonte/link no final")
 
 _before_urls = set()
 if PROMO_ENABLED:
