@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.46")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.47")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -84,8 +84,6 @@ IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "1200"))
 IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "675"))
 
 # ===== Logo para marca d'água (DESATIVADO por decisão do usuário) =====
-# As variáveis continuam aqui para compatibilidade, mas a marca d'água
-# não é mais aplicada por padrão (WATERMARK_ENABLED=false).
 WATERMARK_ENABLED = os.getenv("WATERMARK_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
 LOGO_PATH_IN_REPO = os.getenv("LOGO_PATH_IN_REPO", "bot/radio_luz_gospel_logo.png").strip()
 LOGO_MARK_RATIO = float(os.getenv("LOGO_MARK_RATIO", "0.08"))
@@ -285,7 +283,7 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.46)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.47)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -471,7 +469,7 @@ def get_logo_public_url():
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.46"},
+                headers={"User-Agent": "RadioLuzGospel/12.47"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -521,7 +519,7 @@ def get_fallback_image_url():
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.46"},
+                headers={"User-Agent": "RadioLuzGospel/12.47"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -548,17 +546,16 @@ def _build_image_prompt(article, generated):
         base = article.get("title", "") or generated.get("titulo", "")
 
     style_suffix = (
-        "photorealistic, cinematic photography, warm golden lighting, "
-        "christian gospel atmosphere, church setting, worship mood, "
-        "professional news photography, shallow depth of field, "
-        "high detail, 16:9 aspect ratio"
+        "photorealistic, cinematic photography, warm stage lighting, "
+        "christian gospel atmosphere, professional concert photography, "
+        "shallow depth of field, high detail, 16:9 aspect ratio"
     )
     if "photorealistic" not in base.lower() and "photo" not in base.lower():
         prompt = f"{base}, {style_suffix}"
     else:
         prompt = base
 
-    prompt = re.sub(r"\s+", " ", prompt).strip()[:800]
+    prompt = re.sub(r"\s+", " ", prompt).strip()[:900]
     return prompt
 
 
@@ -588,7 +585,6 @@ def generate_image_url(prompt):
 
 
 def apply_logo_watermark(image_url):
-    # Mantido para uso opcional futuro (WATERMARK_ENABLED=true).
     if not image_url or not WATERMARK_ENABLED:
         return image_url
     logo_url = get_logo_public_url()
@@ -624,7 +620,6 @@ def build_final_image(article, generated):
     ai_url = generate_image_url(prompt)
     if not ai_url:
         return "", ""
-    # Marca d'água desativada por decisão do usuário (WATERMARK_ENABLED=false).
     final_url = apply_logo_watermark(ai_url)
     if final_url and final_url != ai_url:
         return final_url, "Pollinations + marca d'água"
@@ -1069,9 +1064,7 @@ assunto: política partidária, economia, esporte, saúde, tecnologia,
 comportamento sem relação musical, denúncia policial sem ligação com
 música, ou artigo doutrinário sem qualquer referência a música.
 
-REGRA DE OURO: se houver DÚVIDA, marque publicar=true. O custo de
-publicar uma matéria levemente fora do tema é menor do que o custo de
-perder uma matéria musical legítima.
+REGRA DE OURO: se houver DÚVIDA, marque publicar=true.
 
 OUTRAS REGRAS:
 - título novo e jornalístico;
@@ -1083,16 +1076,29 @@ OUTRAS REGRAS:
   musical mais importante citado na matéria (ex.: "Banda Catedral",
   "Kim", "Renascer Praise"). Se não houver pessoa ou banda específica,
   deixe string vazia "".
-- no campo "prompt_imagem", escreva em INGLÊS uma descrição de CENA para
-  gerar uma FOTO realista que ilustre a matéria. A descrição deve:
-  * descrever uma cena gospel (palco de igreja, culto, louvor, coral,
-    show gospel, estúdio de gravação, microfone, instrumentos, multidão
-    com mãos levantadas, iluminação quente, etc.);
-  * NÃO citar nomes de pessoas reais (para evitar rostos falsos);
-  * NÃO pedir rostos específicos de artistas;
-  * usar termos como "photorealistic", "cinematic lighting",
-    "professional photography", "shallow depth of field";
-  * ter no máximo 60 palavras.
+
+- no campo "prompt_imagem", escreva em INGLÊS um prompt DETALHADO para
+  gerar uma FOTO realista que reproduza o CLIMA VISUAL da matéria,
+  inspirado na cena descrita no texto-fonte. NÃO descreva a pessoa
+  específica da matéria, mas sim a CENA como um todo, com um artista
+  gospel genérico. O prompt DEVE incluir:
+  * tipo de ambiente (church stage, gospel concert, worship service,
+    outdoor festival, recording studio, conference hall, etc.);
+  * pose do artista principal (ex.: "female gospel singer with raised
+    hand in worship", "male singer holding microphone close to mouth",
+    "worship leader kneeling on stage", "singer with arms open wide");
+  * cenário e elementos visuais (illuminated cross, LED panels,
+    screens with abstract graphics, stage curtains, band in background,
+    musical instruments, speakers, audience);
+  * iluminação (warm stage lights, orange and yellow spotlights,
+    purple haze, cinematic backlight, dramatic side lighting);
+  * enquadramento (medium shot, wide shot, low angle, blurred crowd
+    in foreground, shallow depth of field);
+  * estilo fotográfico (professional concert photography,
+    photorealistic, cinematic, high detail, editorial news photo);
+  * NÃO citar nomes de pessoas reais nem pedir rostos específicos;
+  * NÃO reproduzir marcas, logotipos ou textos visíveis;
+  * ter no máximo 80 palavras.
 
 FORMATO:
 {{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"...","prompt_imagem":"..."}}
@@ -1607,10 +1613,6 @@ def instagram_art_url(post):
 
 
 def _instagram_check_last_post():
-    """
-    Verifica se o último post do Instagram foi criado nos últimos 90 segundos.
-    Usado quando a API retorna 403 anti-spam mas pode ter publicado mesmo assim.
-    """
     try:
         r = requests.get(
             f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}/media",
@@ -1721,8 +1723,6 @@ def instagram_promote(post, source_name_text):
             print("✓ Divulgação: publicada no Instagram com a arte obrigatória")
             return True
 
-        # Tratamento especial do erro 403 anti-spam:
-        # A API pode retornar 403 mas ter publicado mesmo assim.
         if publish.status_code == 403:
             print(f"⚠ Divulgação: Instagram retornou 403 (possível anti-spam); verificando se publicou...")
             time.sleep(3)
@@ -1819,7 +1819,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.46 ATIVA: logo desativado | Instagram trata 403 anti-spam | prompt permissivo | pré-filtro Python | imagem IA (Pollinations) | fallback institucional | Spotify após 2º parágrafo")
+print("VERSÃO 12.47 ATIVA: prompt de imagem detalhado (clima visual da cena) | logo desativado | Instagram trata 403 anti-spam | prompt permissivo | pré-filtro Python | imagem IA (Pollinations) | fallback institucional | Spotify após 2º parágrafo")
 
 _before_urls = set()
 if PROMO_ENABLED:
