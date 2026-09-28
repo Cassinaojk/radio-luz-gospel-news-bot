@@ -1,29 +1,75 @@
-# Rádio Luz Gospel — Robô de Notícias 9.3 FINAL
+# Rádio Luz Gospel — Robô de Notícias 12.50
 
-Robô GitHub Actions para coletar notícias de fontes gospel, gerar matérias originais em português do Brasil com Gemini e publicar no Blogger.
+Robô GitHub Actions para coletar notícias de fontes gospel, gerar matérias originais em português do Brasil com IA e publicar no Blogger.
 
-## Fontes
-- News Gospel
-- Folha Gospel — Música
-- Guiame — Música
+## Fontes ativas (8)
 
-## Gemini
-- Modelo principal: `gemini-3.5-flash-lite`
-- Fallback: `gemini-3.6-flash`
-- Até 6 chamadas de texto por execução.
-- Ao detectar quota/limite, a execução para sem repetir chamadas inúteis.
+| Fonte | URL base | Feed principal |
+|---|---|---|
+| Fuxico Gospel | https://www.fuxicogospel.com.br/ | `feed/` |
+| News Gospel | https://www.newsgospel.com.br/ | `feed/` |
+| Folha Gospel — Música | https://folhagospel.com/musica/ | `feed/` |
+| Guiame — Música | https://guiame.com.br/musica | `rss.xml` |
+| Gospel Mais | https://gospelmais.com/ | `feed/` |
+| Exibir Gospel | https://exibirgospel.com.br/ | `feed/` |
+| iGospel | https://www.igospel.org.br/ | `feed/` |
+| NT Gospel | https://ntgospel.com/ | `feed/` |
 
-## Originalidade
-A 9.1 não usa similaridade global como motivo isolado para bloquear uma matéria. O bloqueio ocorre somente quando há sinais fortes de reprodução literal: uma sequência longa de palavras idênticas ou sobreposição elevada de blocos de 8 palavras.
+## IA (provedores em ordem de fallback)
+1. **Gemini** — modelo principal `gemini-3.5-flash-lite`
+2. **Gemini-2** — modelo fallback `gemini-3.6-flash`
+3. **Groq** — modelo `openai/gpt-oss-20b`
+4. **Mistral** — modelo `mistral-small-latest`
+
+- Até **6 chamadas de texto por execução** (`MAX_GEMINI_TEXT_CALLS_PER_RUN=6`).
+- Ao detectar quota/limite em um provedor, o robô passa automaticamente para o próximo.
+- Se todos os provedores atingirem quota, a execução para e o restante fica para a próxima.
 
 ## Publicação
-- Até 3 matérias por execução.
-- Deduplicação por fonte/URL.
-- A fonte aparece no artigo como `Fonte de apuração: ...`, sem URL visível.
-- A URL fica registrada em comentário HTML invisível para controle interno.
+- Até **1 matéria por execução** (`MAX_POSTS_PER_RUN=1`).
+- Deduplicação por URL da fonte e por URL do blog.
+- Imagem do post vem de uma **sequência cíclica de 12 imagens** em `bot/Imagens/` (`radioluzgospel1` a `radioluzgospel12`), escolhida com base no total de posts já publicados pelo robô.
+- A fonte fica registrada em comentário HTML invisível (`RADIO_LUZ_GOSPEL_SOURCE_URL`) para controle interno.
+- Spotify embed aparece após o 2º parágrafo da matéria.
 
-## Agendamento
-08:00, 14:00 e 20:00 no horário de Brasília (America/Sao_Paulo), usando cron UTC: 11:00, 17:00 e 23:00.
+## Filtro musical
+O robô usa uma lista de **termos fortes** (`lancamento`, `single`, `álbum`, `show`, `turnê`, `louvor`, `worship`, etc.) e **termos de suporte** (`cantor`, `banda`, `gravadora`, `compositor`, etc.) para decidir se uma notícia é musical.
+- Se houver dúvida, a regra é **publicar**.
+- Posts musicais recebem a label `Músicas`; os demais ficam apenas com `Notícias` e `Rádio Luz Gospel`.
+
+## Originalidade
+A verificação bloqueia apenas sinais fortes de reprodução literal:
+- sequência de **15 palavras ou mais** idênticas à fonte;
+- sobreposição de **8-grams acima de 12%**.
+
+## Divulgação social
+Controlada por variáveis de ambiente. Quando ativada, o robô divulga automaticamente no:
+- **Telegram** (`PROMO_ENABLED=true`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`)
+- **Facebook** (`FACEBOOK_ENABLED=true`, `FACEBOOK_PAGE_ID`, `FACEBOOK_PAGE_ACCESS_TOKEN`)
+- **Instagram** (`INSTAGRAM_ENABLED=true`, `INSTAGRAM_USER_ID`, `INSTAGRAM_ACCESS_TOKEN`)
+
+O Instagram exige uma **arte obrigatória** gerada via QuickChart com a imagem da matéria; se a arte não estiver disponível, a publicação é cancelada para preservar a regra visual.
 
 ## Secrets necessários
-`BLOGGER_BLOG_ID`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `BLOGGER_REFRESH_TOKEN`, `GEMINI_API_KEY`.
+- `BLOGGER_BLOG_ID`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `BLOGGER_REFRESH_TOKEN`
+- `GEMINI_API_KEY`
+
+### Secrets opcionais
+- `GEMINI_API_KEY_2` (segunda chave Gemini)
+- `GROQ_API_KEY`
+- `MISTRAL_API_KEY`
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`
+- `FACEBOOK_PAGE_ID` / `FACEBOOK_PAGE_ACCESS_TOKEN`
+- `INSTAGRAM_USER_ID` / `INSTAGRAM_ACCESS_TOKEN`
+
+## Variáveis de ambiente opcionais
+- `VERBOSE_LOG=true` — ativa log detalhado
+- `MAX_POSTS_PER_RUN` — padrão `1`
+- `MAX_GEMINI_TEXT_CALLS_PER_RUN` — padrão `6`
+- `GEMINI_MODEL` / `GEMINI_FALLBACK_MODEL`
+- `GROQ_MODEL` / `MISTRAL_MODEL`
+- `PROMO_ENABLED=true` — ativa divulgação social
+- `TELEGRAM_CHANNEL_URL` — URL do canal exibido no post
