@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.50")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.51")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -95,6 +95,75 @@ IMAGE_FILES = [
     "bot/Imagens/radioluzgospel11.jpg",
     "bot/Imagens/radioluzgospel12.jpg",
 ]
+
+# ===== BANNER ESTÁCIO (exibido no topo de TODAS as postagens) =====
+ESTACIO_BANNER = '''
+<!-- ===== BANNER ESTÁCIO (antes das postagens) ===== -->
+<div id="estacio-banner-img">
+  <style>
+    #estacio-banner-img {
+      display: block;
+      width: 100%;
+      margin: 0 0 22px 0;
+      padding: 0;
+      line-height: 0;
+      overflow: hidden;
+      border-radius: 16px;
+      box-shadow: 0 6px 18px rgba(0,0,0,.12);
+    }
+    #estacio-banner-img a {
+      display: block;
+      width: 100%;
+      transition: transform .3s ease, box-shadow .3s ease;
+    }
+    #estacio-banner-img img {
+      display: block;
+      width: 100%;
+      height: 140px;
+      object-fit: cover;
+      object-position: center;
+      border: 0;
+      outline: none;
+      border-radius: 16px;
+    }
+    #estacio-banner-img a:hover img {
+      transform: scale(1.02);
+    }
+    @media (max-width: 768px) {
+      #estacio-banner-img {
+        border-radius: 12px;
+        margin-bottom: 16px;
+      }
+      #estacio-banner-img img {
+        height: 100px;
+        border-radius: 12px;
+      }
+      #estacio-banner-img a:hover img {
+        transform: none;
+      }
+    }
+    @media (max-width: 420px) {
+      #estacio-banner-img img {
+        height: 80px;
+      }
+    }
+  </style>
+
+  <a
+    href="https://estacio.br/selecao?cod_agente=14369444&u=723918&end=1"
+    target="_blank"
+    rel="noopener sponsored"
+    aria-label="Cursos de Graduação e Pós na Estácio"
+  >
+    <img
+      src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjoGW9SVc649gUeuASULSbXdIlDodpSI1Vt6F8n1blkocLn3rBo2439MzRacnHLURBIE7E1x-zKPRxnxNd38tlpIDo0jYPyvB_XxrpEHpqCjpaGU57e9jf1I5L1hVg00ehMgL9gZWYT_jrvZjitvycwlWTSkXXyboOZzy98mzkGMGHKTiUH84-lD63mprI/s1200/Estacio%20Banner.png"
+      alt="Banner Estácio - Graduação e Pós-Graduação com bolsas de estudo"
+      loading="lazy"
+    >
+  </a>
+</div>
+<!-- ===== FIM BANNER ESTÁCIO ===== -->
+'''
 
 # Limites
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "1"))
@@ -291,7 +360,7 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.50)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.51)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -478,7 +547,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.50"},
+                headers={"User-Agent": "RadioLuzGospel/12.51"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -579,7 +648,7 @@ def get_article(url):
         "url": normalize_url(url),
         "title": title,
         "date": d,
-        "image": img,  # mantido só como referência, não usado no post
+        "image": img,
         "text": text[:16000],
         "videos": vv,
     }
@@ -1102,7 +1171,9 @@ def html(article, generated, final_image="", image_origin=""):
         .replace('"', "&quot;")
     )
 
+    # ===== BANNER ESTÁCIO NO TOPO DE TODAS AS POSTAGENS =====
     content = [
+        ESTACIO_BANNER,
         f'<p><strong>{generated["resumo"]}</strong></p>',
         (
             f'<p><img src="{safe_image}" '
@@ -1709,7 +1780,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.50 ATIVA: sequência cíclica de 12 imagens em bot/Imagens/ (radioluzgospel1 a radioluzgospel12) | Spotify após 2º parágrafo | sem Fonte/link no final | NT Gospel integrado")
+print("VERSÃO 12.51 ATIVA: banner Estácio no topo de todas as postagens | sequência cíclica de 12 imagens em bot/Imagens/ | Spotify após 2º parágrafo | sem Fonte/link no final | NT Gospel integrado")
 
 _before_urls = set()
 if PROMO_ENABLED:
