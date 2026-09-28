@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.51")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.52")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -78,9 +78,6 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
 # ===== Sequência de imagens (usadas em ciclo 1, 2, 3... 12, 1, 2, ...) =====
-# Nomes exatos dos arquivos no repositório (pasta bot/Imagens/).
-# O robô escolhe a próxima imagem com base no total de posts já publicados
-# (que ele conta pelos marcadores RADIO_LUZ_GOSPEL_SOURCE_URL).
 IMAGE_FILES = [
     "bot/Imagens/radioluzgospel1.png",
     "bot/Imagens/radioluzgospel2.jpg",
@@ -96,73 +93,78 @@ IMAGE_FILES = [
     "bot/Imagens/radioluzgospel12.jpg",
 ]
 
-# ===== BANNER ESTÁCIO (exibido no topo de TODAS as postagens) =====
+# ===== BANNER ESTÁCIO (inserido ACIMA do título da postagem via JS) =====
+# O script cria o banner e o posiciona antes do título (h1/h3/entry-title)
+# do post. Não altera a imagem principal da matéria.
 ESTACIO_BANNER = '''
-<!-- ===== BANNER ESTÁCIO (antes das postagens) ===== -->
-<div id="estacio-banner-img">
-  <style>
-    #estacio-banner-img {
-      display: block;
-      width: 100%;
-      margin: 0 0 22px 0;
-      padding: 0;
-      line-height: 0;
-      overflow: hidden;
-      border-radius: 16px;
-      box-shadow: 0 6px 18px rgba(0,0,0,.12);
+<style>
+  #estacio-banner-img {
+    display: block;
+    width: 100%;
+    margin: 0 0 22px 0;
+    padding: 0;
+    line-height: 0;
+    overflow: hidden;
+    border-radius: 16px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.12);
+  }
+  #estacio-banner-img a {
+    display: block;
+    width: 100%;
+    transition: transform .3s ease;
+  }
+  #estacio-banner-img img {
+    display: block;
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    object-position: center;
+    border: 0;
+    outline: none;
+    border-radius: 16px;
+  }
+  #estacio-banner-img a:hover img { transform: scale(1.02); }
+  @media (max-width: 768px) {
+    #estacio-banner-img { border-radius: 12px; margin-bottom: 16px; }
+    #estacio-banner-img img { height: 100px; border-radius: 12px; }
+    #estacio-banner-img a:hover img { transform: none; }
+  }
+  @media (max-width: 420px) {
+    #estacio-banner-img img { height: 80px; }
+  }
+</style>
+<script>
+(function(){
+  if (document.getElementById('estacio-banner-img')) return;
+  function insertBanner(){
+    if (document.getElementById('estacio-banner-img')) return;
+    var selectors = [
+      'h3.post-title', 'h1.post-title',
+      'h1.entry-title', 'h2.entry-title',
+      '.post-title', '.entry-title',
+      '.post h1', '.post h3',
+      'article h1', 'article h3',
+      'h1.title'
+    ];
+    var title = null;
+    for (var i = 0; i < selectors.length; i++) {
+      var el = document.querySelector(selectors[i]);
+      if (el) { title = el; break; }
     }
-    #estacio-banner-img a {
-      display: block;
-      width: 100%;
-      transition: transform .3s ease, box-shadow .3s ease;
-    }
-    #estacio-banner-img img {
-      display: block;
-      width: 100%;
-      height: 140px;
-      object-fit: cover;
-      object-position: center;
-      border: 0;
-      outline: none;
-      border-radius: 16px;
-    }
-    #estacio-banner-img a:hover img {
-      transform: scale(1.02);
-    }
-    @media (max-width: 768px) {
-      #estacio-banner-img {
-        border-radius: 12px;
-        margin-bottom: 16px;
-      }
-      #estacio-banner-img img {
-        height: 100px;
-        border-radius: 12px;
-      }
-      #estacio-banner-img a:hover img {
-        transform: none;
-      }
-    }
-    @media (max-width: 420px) {
-      #estacio-banner-img img {
-        height: 80px;
-      }
-    }
-  </style>
-
-  <a
-    href="https://estacio.br/selecao?cod_agente=14369444&u=723918&end=1"
-    target="_blank"
-    rel="noopener sponsored"
-    aria-label="Cursos de Graduação e Pós na Estácio"
-  >
-    <img
-      src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjoGW9SVc649gUeuASULSbXdIlDodpSI1Vt6F8n1blkocLn3rBo2439MzRacnHLURBIE7E1x-zKPRxnxNd38tlpIDo0jYPyvB_XxrpEHpqCjpaGU57e9jf1I5L1hVg00ehMgL9gZWYT_jrvZjitvycwlWTSkXXyboOZzy98mzkGMGHKTiUH84-lD63mprI/s1200/Estacio%20Banner.png"
-      alt="Banner Estácio - Graduação e Pós-Graduação com bolsas de estudo"
-      loading="lazy"
-    >
-  </a>
-</div>
-<!-- ===== FIM BANNER ESTÁCIO ===== -->
+    if (!title) return;
+    var banner = document.createElement('div');
+    banner.id = 'estacio-banner-img';
+    banner.innerHTML = '<a href="https://estacio.br/selecao?cod_agente=14369444&u=723918&end=1" target="_blank" rel="noopener sponsored" aria-label="Cursos de Graduação e Pós na Estácio"><img src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjoGW9SVc649gUeuASULSbXdIlDodpSI1Vt6F8n1blkocLn3rBo2439MzRacnHLURBIE7E1x-zKPRxnxNd38tlpIDo0jYPyvB_XxrpEHpqCjpaGU57e9jf1I5L1hVg00ehMgL9gZWYT_jrvZjitvycwlWTSkXXyboOZzy98mzkGMGHKTiUH84-lD63mprI/s1200/Estacio%20Banner.png" alt="Banner Estácio - Graduação e Pós-Graduação com bolsas de estudo" loading="lazy"></a>';
+    title.parentNode.insertBefore(banner, title);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', insertBanner);
+  } else {
+    insertBanner();
+  }
+  window.addEventListener('load', insertBanner);
+})();
+</script>
 '''
 
 # Limites
@@ -360,7 +362,7 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.51)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.52)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -518,11 +520,6 @@ def videos(x):
 # ============================================================
 
 def resolve_repo_image_url(relative_path):
-    """
-    Converte o caminho relativo no repositório (ex.: bot/Imagens/x.png)
-    em URL pública (jsDelivr ou raw.githubusercontent.com).
-    Retorna "" se o arquivo não existir.
-    """
     if not relative_path:
         return ""
     if relative_path in _image_url_cache:
@@ -547,7 +544,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.51"},
+                headers={"User-Agent": "RadioLuzGospel/12.52"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -565,14 +562,6 @@ def resolve_repo_image_url(relative_path):
 
 
 def pick_next_image_url(posts_count):
-    """
-    Escolhe a próxima imagem da sequência.
-    - posts_count = quantidade de posts do robô já publicados no blog.
-    - A próxima imagem é (posts_count % 12) + 1 (1-based), depois converte
-      para o índice da lista (0-based).
-    - Se a imagem escolhida não puder ser acessada, tenta a próxima
-      (até dar a volta na lista toda).
-    """
     if not IMAGE_FILES:
         return "", ""
     total = len(IMAGE_FILES)
@@ -756,10 +745,6 @@ def existing(api, show_log=True):
 
 
 def count_bot_posts(api):
-    """
-    Conta quantos posts do robô existem no blog (marcados por
-    RADIO_LUZ_GOSPEL_SOURCE_URL). Usado para escolher a próxima imagem.
-    """
     count = 0
     token = None
     try:
@@ -1162,6 +1147,7 @@ def html(article, generated, final_image="", image_origin=""):
         .replace('"', "&quot;")
     )
 
+    # ===== Imagem principal = SEMPRE a do repositório git (sequência) =====
     image_url = final_image or article["image"]
     safe_image = image_url.replace("&", "&amp;").replace('"', "&quot;")
 
@@ -1171,7 +1157,9 @@ def html(article, generated, final_image="", image_origin=""):
         .replace('"', "&quot;")
     )
 
-    # ===== BANNER ESTÁCIO NO TOPO DE TODAS AS POSTAGENS =====
+    # ===== BANNER ESTÁCIO (movido para cima do título via JS) =====
+    # O banner é inserido no conteúdo, mas o script dentro dele o move
+    # para antes do título da postagem.
     content = [
         ESTACIO_BANNER,
         f'<p><strong>{generated["resumo"]}</strong></p>',
@@ -1780,7 +1768,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.51 ATIVA: banner Estácio no topo de todas as postagens | sequência cíclica de 12 imagens em bot/Imagens/ | Spotify após 2º parágrafo | sem Fonte/link no final | NT Gospel integrado")
+print("VERSÃO 12.52 ATIVA: banner Estácio ACIMA do título (via JS) | sequência cíclica de 12 imagens em bot/Imagens/ | Spotify após 2º parágrafo | sem Fonte/link no final | NT Gospel integrado")
 
 _before_urls = set()
 if PROMO_ENABLED:
