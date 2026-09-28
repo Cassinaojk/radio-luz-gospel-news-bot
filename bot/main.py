@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.49")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.50")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -194,7 +194,7 @@ def quick_music_prefilter(article):
     return False, "sem termos musicais fortes no título/trecho inicial"
 
 
-# ===== Fontes (UAU Gospel removida) =====
+# ===== Fontes =====
 SOURCES = [
     {
         "nome": "Fuxico Gospel",
@@ -266,6 +266,15 @@ SOURCES = [
         ],
         "music_page": True,
     },
+    {
+        "nome": "NT Gospel",
+        "url": "https://ntgospel.com/",
+        "feeds": [
+            "https://ntgospel.com/feed/",
+            "https://ntgospel.com/feed",
+        ],
+        "music_page": True,
+    },
 ]
 
 BAD_PATHS = (
@@ -282,7 +291,7 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.49)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.50)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -469,7 +478,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.49"},
+                headers={"User-Agent": "RadioLuzGospel/12.50"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -1175,7 +1184,7 @@ def html(article, generated, final_image="", image_origin=""):
 
 
 def main():
-    print("Fontes: Fuxico + News Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel | /musicas por conteúdo")
+    print("Fontes: Fuxico + News Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel + NT Gospel | /musicas por conteúdo")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls = existing(api)
@@ -1659,6 +1668,7 @@ def source_name(url):
         ("gospelmais.com", "Gospel Mais"),
         ("exibirgospel.com.br", "Exibir Gospel"),
         ("igospel.org.br", "iGospel"),
+        ("ntgospel.com", "NT Gospel"),
     )
     for host_part, name in mapping:
         if host_part in host:
@@ -1699,7 +1709,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.49 ATIVA: sequência cíclica de 12 imagens em bot/Imagens/ (radioluzgospel1 a radioluzgospel12) | Spotify após 2º parágrafo | sem Fonte/link no final")
+print("VERSÃO 12.50 ATIVA: sequência cíclica de 12 imagens em bot/Imagens/ (radioluzgospel1 a radioluzgospel12) | Spotify após 2º parágrafo | sem Fonte/link no final | NT Gospel integrado")
 
 _before_urls = set()
 if PROMO_ENABLED:
