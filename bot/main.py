@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.51")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.52")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -78,9 +78,6 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
 # ===== Sequência de imagens (usadas em ciclo 1, 2, 3... 12, 1, 2, ...) =====
-# Nomes exatos dos arquivos no repositório (pasta bot/Imagens/).
-# O robô escolhe a próxima imagem com base no total de posts já publicados
-# (que ele conta pelos marcadores RADIO_LUZ_GOSPEL_SOURCE_URL).
 IMAGE_FILES = [
     "bot/Imagens/radioluzgospel1.png",
     "bot/Imagens/radioluzgospel2.jpg",
@@ -290,8 +287,27 @@ SHARE_DOMAINS = (
     "t.me/share", "linkedin.com/share",
 )
 
+# ===== Whiltelist de plataformas de vídeo =====
+VIDEO_HOSTS = (
+    "youtube.com/embed/",
+    "youtube.com/watch",
+    "youtube-nocookie.com/embed/",
+    "youtu.be/",
+    "player.vimeo.com",
+    "vimeo.com/video",
+    "facebook.com/plugins/video",
+    "web.facebook.com/plugins/video",
+    "instagram.com/p/",
+    "instagram.com/reel/",
+    "instagram.com/tv/",
+    "dailymotion.com/embed",
+    "twitch.tv/",
+    "streamable.com/e/",
+    "rumble.com/embed",
+)
+
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.51)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.52)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -334,8 +350,7 @@ def soup(url, xml=False):
                 print("Parser XML indisponível; usando parser HTML:", e)
         return BeautifulSoup(r.text, "html.parser")
     except requests.exceptions.SSLError:
-        # Silencioso: normalmente são links de anúncio com certificado inválido,
-        # não artigos das fontes. Não polui o log.
+        # Silencioso: normalmente são links de anúncio com certificado inválido.
         return None
     except Exception as e:
         print("Erro:", e)
@@ -438,26 +453,75 @@ def image_original(x):
 
 
 def videos(x):
+    """
+    Extrai apenas vídeos reais e visíveis da página.
+
+    Regras:
+    - Aceita SOMENTE plataformas de vídeo conhecidas (whitelist VIDEO_HOSTS).
+    - Ignora iframes escondidos por estilo inline (display:none, visibility:hidden,
+      width/height 0 ou menores que 100px, opacity:0).
+    - Ignora iframes dentro de containers ocultos.
+    - Ignora iframes de anúncios (ads, doubleclick, googlesyndication, taboola,
+      outbrain, etc.).
+    - Retorna no máximo 3 vídeos.
+    """
+    BLOCK_HOSTS = (
+        "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+        "adservice.google", "taboola.com", "outbrain.com", "criteo.",
+        "pubmatic.", "rubiconproject.", "adnxs.com", "amazon-adsystem.",
+        "facebook.com/plugins/post", "instagram.com/embed.js",
+    )
     out = []
     for n in x.find_all("iframe"):
-        u = n.get("src", "").strip()
+        # Bloqueia iframes de anúncio
+        u = (n.get("src") or n.get("data-src") or "").strip()
         if u.startswith("//"):
             u = "https:" + u
-        if u.startswith(("http://", "https://")) and u not in out:
+        if not u.startswith(("http://", "https://")):
+            continue
+        u_lower = u.lower()
+        if any(b in u_lower for b in BLOCK_HOSTS):
+            continue
+
+        # Só aceita hosts de vídeo conhecidos
+        if not any(host in u_lower for host in VIDEO_HOSTS):
+            continue
+
+        # Ignora escondidos por estilo inline
+        style = (n.get("style") or "").lower().replace(" ", "")
+        if any(z in style for z in (
+            "display:none", "visibility:hidden", "opacity:0", "width:0", "height:0",
+        )):
+            continue
+
+        # Ignora dimensões minúsculas (tracking pixels)
+        try:
+            w_attr = (n.get("width") or "").strip()
+            h_attr = (n.get("height") or "").strip()
+            w = int(re.sub(r"[^\d]", "", w_attr) or "0")
+            h = int(re.sub(r"[^\d]", "", h_attr) or "0")
+            if (w and w < 100) or (h and h < 100):
+                continue
+        except Exception:
+            pass
+
+        # Ignora se estiver dentro de um container oculto
+        parent_hidden = n.find_parent(
+            style=re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
+        )
+        if parent_hidden:
+            continue
+
+        if u not in out:
             out.append(u)
-    return out[:5]
+    return out[:3]
 
 
 # ============================================================
-# SEQUÊNCIA DE IMAGENS (bot/Imagens/radioluzgospelN)
+# SEQUÊNCIA DE IMAGENS
 # ============================================================
 
 def resolve_repo_image_url(relative_path):
-    """
-    Converte o caminho relativo no repositório (ex.: bot/Imagens/x.png)
-    em URL pública (jsDelivr ou raw.githubusercontent.com).
-    Retorna "" se o arquivo não existir.
-    """
     if not relative_path:
         return ""
     if relative_path in _image_url_cache:
@@ -482,7 +546,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.51"},
+                headers={"User-Agent": "RadioLuzGospel/12.52"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -500,14 +564,6 @@ def resolve_repo_image_url(relative_path):
 
 
 def pick_next_image_url(posts_count):
-    """
-    Escolhe a próxima imagem da sequência.
-    - posts_count = quantidade de posts do robô já publicados no blog.
-    - A próxima imagem é (posts_count % 12) + 1 (1-based), depois converte
-      para o índice da lista (0-based).
-    - Se a imagem escolhida não puder ser acessada, tenta a próxima
-      (até dar a volta na lista toda).
-    """
     if not IMAGE_FILES:
         return "", ""
     total = len(IMAGE_FILES)
@@ -578,12 +634,14 @@ def get_article(url):
     vv = videos(x)
     print("Notícia encontrada:", title)
     print("Texto extraído:", len(text), "caracteres")
+    if vv:
+        print(f"Vídeos válidos encontrados: {len(vv)}")
 
     return {
         "url": normalize_url(url),
         "title": title,
         "date": d,
-        "image": img,  # mantido só como referência, não usado no post
+        "image": img,
         "text": text[:16000],
         "videos": vv,
     }
@@ -691,10 +749,6 @@ def existing(api, show_log=True):
 
 
 def count_bot_posts(api):
-    """
-    Conta quantos posts do robô existem no blog (marcados por
-    RADIO_LUZ_GOSPEL_SOURCE_URL). Usado para escolher a próxima imagem.
-    """
     count = 0
     token = None
     try:
@@ -1081,9 +1135,7 @@ construções das frases. Não repita sequências da fonte.
         print("⚠ IA: todas as tentativas foram recusadas por originalidade")
     elif last_reason == "sem informação suficiente":
         print("⚠ IA: provedores não consideraram a fonte suficiente para publicação")
-    elif last_reason == "resposta_invalida":
-        print("⚠ IA: geração retornou formato inválido")
-    elif last_reason == "resposta inválida":
+    elif last_reason in ("resposta inválida", "resposta_invalida"):
         print("⚠ IA: geração retornou formato inválido")
     else:
         print("⚠ IA: nenhum provedor disponível conseguiu gerar a matéria")
@@ -1118,7 +1170,7 @@ def html(article, generated, final_image="", image_origin=""):
         ),
     ]
 
-    # ===== BANNER ESTÁCIO (substitui o Spotify que ficava após o 2º parágrafo) =====
+    # ===== BANNER ESTÁCIO (após o 2º parágrafo) =====
     estacio_banner = (
         '<!-- ===== BANNER ESTÁCIO ===== -->'
         '<div id="estacio-banner-img">'
@@ -1151,7 +1203,41 @@ def html(article, generated, final_image="", image_origin=""):
         '<!-- ===== FIM BANNER ESTÁCIO ===== -->'
     )
 
-    # ===== Bloco Spotify — agora vai para o FINAL das reportagens =====
+    # ===== Corpo da matéria =====
+    article_paragraphs = []
+    for paragraph in re.split(r"\n+", generated["materia"]):
+        paragraph = paragraph.strip()
+        if paragraph:
+            article_paragraphs.append(paragraph)
+
+    for index, paragraph in enumerate(article_paragraphs):
+        content.append(f"<p>{paragraph}</p>")
+        if index == 1:
+            content.append(estacio_banner)
+
+    # ===== VÍDEOS — imediatamente após o último parágrafo =====
+    # Container responsivo 16:9, sem <p> envolvente, sem espaço fantasma.
+    for video_url in article["videos"]:
+        content.append(
+            '<div style="margin:24px 0;padding:0;">'
+            '<div style="position:relative;width:100%;padding-bottom:56.25%;'
+            'height:0;overflow:hidden;border-radius:12px;'
+            'box-shadow:0 4px 12px rgba(0,0,0,0.15);">'
+            f'<iframe src="{video_url}" '
+            'style="position:absolute;top:0;left:0;width:100%;height:100%;'
+            'border:0;" '
+            'frameborder="0" '
+            'allow="accelerometer; autoplay; clipboard-write; encrypted-media; '
+            'gyroscope; picture-in-picture; web-share" '
+            'allowfullscreen '
+            'loading="lazy" '
+            'title="Vídeo da matéria">'
+            '</iframe>'
+            '</div>'
+            '</div>'
+        )
+
+    # ===== Bloco Spotify — depois dos vídeos =====
     spotify_block = (
         '<div style="max-width:600px;margin:2rem auto;padding:0 1rem;">'
         '<h3 style="text-align:center;color:#1DB954;font-family:Arial,sans-serif;margin-bottom:1rem;">'
@@ -1168,22 +1254,9 @@ def html(article, generated, final_image="", image_origin=""):
         '</p>'
         '</div>'
     )
-
-    article_paragraphs = []
-    for paragraph in re.split(r"\n+", generated["materia"]):
-        paragraph = paragraph.strip()
-        if paragraph:
-            article_paragraphs.append(paragraph)
-
-    # Corpo da matéria: banner Estácio entra após o 2º parágrafo
-    for index, paragraph in enumerate(article_paragraphs):
-        content.append(f"<p>{paragraph}</p>")
-        if index == 1:
-            content.append(estacio_banner)
-
-    # Spotify no FINAL das reportagens (depois do último parágrafo)
     content.append(spotify_block)
 
+    # ===== Bloco Telegram — por último =====
     telegram_channel = os.getenv(
         "TELEGRAM_CHANNEL_URL",
         "https://t.me/radioluzgospelnoticias",
@@ -1208,16 +1281,6 @@ def html(article, generated, final_image="", image_origin=""):
         '</a></p>'
         '</div>'
     )
-
-    for video_url in article["videos"]:
-        content.append(
-            '<p><iframe '
-            f'src="{video_url}" '
-            'width="100%" height="315" '
-            'frameborder="0" '
-            'allowfullscreen '
-            'loading="lazy"></iframe></p>'
-        )
 
     source_marker = f"<!-- RADIO_LUZ_GOSPEL_SOURCE_URL: {safe_source_url} -->"
     image_marker = ""
@@ -1290,7 +1353,6 @@ def main():
                 break
             continue
 
-        # ===== Escolhe a próxima imagem da sequência (1, 2, 3... 12, 1, 2...) =====
         final_image, chosen_file = pick_next_image_url(posts_count + published)
         if not final_image:
             print("⚠ Imagem sequencial: nenhuma imagem acessível na pasta bot/Imagens/.")
@@ -1753,7 +1815,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.51 ATIVA: Banner Estácio após o 2º parágrafo | Spotify no final das reportagens | sequência cíclica de 12 imagens | NT Gospel integrado")
+print("VERSÃO 12.52 ATIVA: vídeos (apenas reais) logo após o último parágrafo | Spotify em seguida | Telegram por último | Banner Estácio após o 2º parágrafo | sequência cíclica de 12 imagens")
 
 _before_urls = set()
 if PROMO_ENABLED:
