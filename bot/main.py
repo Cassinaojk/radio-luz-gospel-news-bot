@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.50")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.51")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -291,7 +291,7 @@ SHARE_DOMAINS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.50)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.51)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -333,6 +333,10 @@ def soup(url, xml=False):
             except Exception as e:
                 print("Parser XML indisponível; usando parser HTML:", e)
         return BeautifulSoup(r.text, "html.parser")
+    except requests.exceptions.SSLError:
+        # Silencioso: normalmente são links de anúncio com certificado inválido,
+        # não artigos das fontes. Não polui o log.
+        return None
     except Exception as e:
         print("Erro:", e)
         return None
@@ -478,7 +482,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.50"},
+                headers={"User-Agent": "RadioLuzGospel/12.51"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -1077,6 +1081,8 @@ construções das frases. Não repita sequências da fonte.
         print("⚠ IA: todas as tentativas foram recusadas por originalidade")
     elif last_reason == "sem informação suficiente":
         print("⚠ IA: provedores não consideraram a fonte suficiente para publicação")
+    elif last_reason == "resposta_invalida":
+        print("⚠ IA: geração retornou formato inválido")
     elif last_reason == "resposta inválida":
         print("⚠ IA: geração retornou formato inválido")
     else:
@@ -1112,6 +1118,40 @@ def html(article, generated, final_image="", image_origin=""):
         ),
     ]
 
+    # ===== BANNER ESTÁCIO (substitui o Spotify que ficava após o 2º parágrafo) =====
+    estacio_banner = (
+        '<!-- ===== BANNER ESTÁCIO ===== -->'
+        '<div id="estacio-banner-img">'
+        '<style>'
+        '#estacio-banner-img{display:block;width:100%;margin:22px 0;padding:0;'
+        'line-height:0;overflow:hidden;border-radius:16px;'
+        'box-shadow:0 6px 18px rgba(0,0,0,.12);}'
+        '#estacio-banner-img a{display:block;width:100%;'
+        'transition:transform .3s ease,box-shadow .3s ease;}'
+        '#estacio-banner-img img{display:block;width:100%;height:140px;'
+        'object-fit:cover;object-position:center;border:0;outline:none;'
+        'border-radius:16px;}'
+        '#estacio-banner-img a:hover img{transform:scale(1.02);}'
+        '@media (max-width:768px){'
+        '#estacio-banner-img{border-radius:12px;margin:16px 0;}'
+        '#estacio-banner-img img{height:100px;border-radius:12px;}'
+        '#estacio-banner-img a:hover img{transform:none;}}'
+        '@media (max-width:420px){'
+        '#estacio-banner-img img{height:80px;}}'
+        '</style>'
+        '<a href="https://estacio.br/selecao?cod_agente=14369444&u=723918&end=1" '
+        'target="_blank" rel="noopener sponsored" '
+        'aria-label="Cursos de Graduação e Pós na Estácio">'
+        '<img '
+        'src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjoGW9SVc649gUeuASULSbXdIlDodpSI1Vt6F8n1blkocLn3rBo2439MzRacnHLURBIE7E1x-zKPRxnxNd38tlpIDo0jYPyvB_XxrpEHpqCjpaGU57e9jf1I5L1hVg00ehMgL9gZWYT_jrvZjitvycwlWTSkXXyboOZzy98mzkGMGHKTiUH84-lD63mprI/s1200/Estacio%20Banner.png" '
+        'alt="Banner Estácio - Graduação e Pós-Graduação com bolsas de estudo" '
+        'loading="lazy">'
+        '</a>'
+        '</div>'
+        '<!-- ===== FIM BANNER ESTÁCIO ===== -->'
+    )
+
+    # ===== Bloco Spotify — agora vai para o FINAL das reportagens =====
     spotify_block = (
         '<div style="max-width:600px;margin:2rem auto;padding:0 1rem;">'
         '<h3 style="text-align:center;color:#1DB954;font-family:Arial,sans-serif;margin-bottom:1rem;">'
@@ -1135,10 +1175,14 @@ def html(article, generated, final_image="", image_origin=""):
         if paragraph:
             article_paragraphs.append(paragraph)
 
+    # Corpo da matéria: banner Estácio entra após o 2º parágrafo
     for index, paragraph in enumerate(article_paragraphs):
         content.append(f"<p>{paragraph}</p>")
         if index == 1:
-            content.append(spotify_block)
+            content.append(estacio_banner)
+
+    # Spotify no FINAL das reportagens (depois do último parágrafo)
+    content.append(spotify_block)
 
     telegram_channel = os.getenv(
         "TELEGRAM_CHANNEL_URL",
@@ -1709,7 +1753,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.50 ATIVA: sequência cíclica de 12 imagens em bot/Imagens/ (radioluzgospel1 a radioluzgospel12) | Spotify após 2º parágrafo | sem Fonte/link no final | NT Gospel integrado")
+print("VERSÃO 12.51 ATIVA: Banner Estácio após o 2º parágrafo | Spotify no final das reportagens | sequência cíclica de 12 imagens | NT Gospel integrado")
 
 _before_urls = set()
 if PROMO_ENABLED:
