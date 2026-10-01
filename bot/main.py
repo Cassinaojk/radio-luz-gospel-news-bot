@@ -26,6 +26,8 @@ def print(*args, **kwargs):
         or message.startswith("✓ Publicada:")
         or message.startswith("✓ Imagem:")
         or message.startswith("✓ Fallback:")
+        or message.startswith("✓ SEO:")
+        or message.startswith("✓ Labels:")
         or message.startswith("⚠ Blogger:")
         or message.startswith("⚠ IA:")
         or message.startswith("⚠ Gemini:")
@@ -52,13 +54,22 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.52")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.53 (SEO Automático)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
 GOOGLE_CLIENT_SECRET = os.environ["GOOGLE_CLIENT_SECRET"]
 BLOGGER_REFRESH_TOKEN = os.environ["BLOGGER_REFRESH_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+
+# ===== SEO =====
+BLOG_NAME = os.getenv("BLOG_NAME", "Rádio Luz Gospel").strip() or "Rádio Luz Gospel"
+BLOG_HOME_URL = os.getenv("BLOG_HOME_URL", "https://radioluzgospel.blogspot.com").strip().rstrip("/")
+BLOG_LOCALE = os.getenv("BLOG_LOCALE", "pt_BR").strip() or "pt_BR"
+BLOG_TWITTER = os.getenv("BLOG_TWITTER", "").strip()
+SEO_TITLE_SUFFIX = os.getenv("SEO_TITLE_SUFFIX", f" | {BLOG_NAME}").strip()
+SEO_DESCRIPTION_MAX = int(os.getenv("SEO_DESCRIPTION_MAX", "160"))
+SEO_KEYWORDS_MAX = int(os.getenv("SEO_KEYWORDS_MAX", "12"))
 
 # Divulgação
 PROMO_ENABLED = os.getenv("PROMO_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
@@ -307,7 +318,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.52)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.53)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -350,7 +361,6 @@ def soup(url, xml=False):
                 print("Parser XML indisponível; usando parser HTML:", e)
         return BeautifulSoup(r.text, "html.parser")
     except requests.exceptions.SSLError:
-        # Silencioso: normalmente são links de anúncio com certificado inválido.
         return None
     except Exception as e:
         print("Erro:", e)
@@ -421,9 +431,6 @@ def article_date(x):
 
 
 def image_original(x):
-    """
-    Mantida apenas para compatibilidade. Não é mais usada para o post.
-    """
     values = []
     for sel in (
         'meta[property="og:image"]',
@@ -453,18 +460,6 @@ def image_original(x):
 
 
 def videos(x):
-    """
-    Extrai apenas vídeos reais e visíveis da página.
-
-    Regras:
-    - Aceita SOMENTE plataformas de vídeo conhecidas (whitelist VIDEO_HOSTS).
-    - Ignora iframes escondidos por estilo inline (display:none, visibility:hidden,
-      width/height 0 ou menores que 100px, opacity:0).
-    - Ignora iframes dentro de containers ocultos.
-    - Ignora iframes de anúncios (ads, doubleclick, googlesyndication, taboola,
-      outbrain, etc.).
-    - Retorna no máximo 3 vídeos.
-    """
     BLOCK_HOSTS = (
         "doubleclick.net", "googlesyndication.com", "googleadservices.com",
         "adservice.google", "taboola.com", "outbrain.com", "criteo.",
@@ -473,7 +468,6 @@ def videos(x):
     )
     out = []
     for n in x.find_all("iframe"):
-        # Bloqueia iframes de anúncio
         u = (n.get("src") or n.get("data-src") or "").strip()
         if u.startswith("//"):
             u = "https:" + u
@@ -482,19 +476,13 @@ def videos(x):
         u_lower = u.lower()
         if any(b in u_lower for b in BLOCK_HOSTS):
             continue
-
-        # Só aceita hosts de vídeo conhecidos
         if not any(host in u_lower for host in VIDEO_HOSTS):
             continue
-
-        # Ignora escondidos por estilo inline
         style = (n.get("style") or "").lower().replace(" ", "")
         if any(z in style for z in (
             "display:none", "visibility:hidden", "opacity:0", "width:0", "height:0",
         )):
             continue
-
-        # Ignora dimensões minúsculas (tracking pixels)
         try:
             w_attr = (n.get("width") or "").strip()
             h_attr = (n.get("height") or "").strip()
@@ -504,14 +492,11 @@ def videos(x):
                 continue
         except Exception:
             pass
-
-        # Ignora se estiver dentro de um container oculto
         parent_hidden = n.find_parent(
             style=re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
         )
         if parent_hidden:
             continue
-
         if u not in out:
             out.append(u)
     return out[:3]
@@ -546,7 +531,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.52"},
+                headers={"User-Agent": "RadioLuzGospel/12.53"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -856,10 +841,7 @@ def gemini_request(client, model, prompt):
                 raise
             delay = GEMINI_RETRY_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, 2)
             time.sleep(delay)
-    raise last_error
-
-
-def norm_words(text):
+    raise last_errordef norm_words(text):
     text = unicodedata.normalize("NFKD", text or "")
     text = "".join(c for c in text if not unicodedata.combining(c)).lower()
     return re.findall(r"[a-z0-9]+", text)
@@ -1053,9 +1035,15 @@ OUTRAS REGRAS:
   musical mais importante citado na matéria (ex.: "Banda Catedral",
   "Kim", "Renascer Praise"). Se não houver pessoa ou banda específica,
   deixe string vazia "".
+- no campo "palavras_chave", informe uma lista com 5 a 10 palavras-chave
+  de SEO relacionadas ao conteúdo (nomes, gêneros, temas, marcas).
+  Ex.: ["Kim", "música gospel", "lançamento", "single", "adoração"].
+- no campo "categoria_seo", informe a categoria principal do assunto:
+  "Música Gospel", "Lançamento", "Show", "Entrevista", "Evento",
+  "Notícia Gospel" ou "Testemunho".
 
 FORMATO:
-{{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"..."}}
+{{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"...","palavras_chave":["..."],"categoria_seo":"..."}}
 
 TÍTULO ORIGINAL:
 {article['title']}
@@ -1100,6 +1088,10 @@ construções das frases. Não repita sequências da fonte.
                 resumo = str(data.get("resumo", "")).strip()
                 materia = str(data.get("materia", "")).strip()
                 assunto = str(data.get("assunto_principal", "")).strip()
+                palavras_chave = data.get("palavras_chave", []) or []
+                if isinstance(palavras_chave, str):
+                    palavras_chave = [p.strip() for p in palavras_chave.split(",") if p.strip()]
+                categoria_seo = str(data.get("categoria_seo", "")).strip()
                 if not titulo or not resumo or len(materia) < 700:
                     last_reason = "resposta inválida"
                     print(f"⚠ {provider}: resposta inválida ou curta demais.")
@@ -1118,6 +1110,8 @@ construções das frases. Não repita sequências da fonte.
                     "resumo": resumo,
                     "materia": materia,
                     "assunto_principal": assunto,
+                    "palavras_chave": palavras_chave[:SEO_KEYWORDS_MAX],
+                    "categoria_seo": categoria_seo,
                 }
             except Exception as exc:
                 if _is_quota_exception(exc):
@@ -1142,9 +1136,267 @@ construções das frases. Não repita sequências da fonte.
     return None
 
 
-def html(article, generated, final_image="", image_origin=""):
+# ============================================================
+# SEO AUTOMÁTICO
+# ============================================================
+
+def _strip_html(text):
+    return re.sub(r"\s+", " ", BeautifulSoup(str(text or ""), "html.parser").get_text(" ", strip=True)).strip()
+
+
+def _truncate(text, limit):
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    last_space = cut.rfind(" ")
+    if last_space > limit * 0.6:
+        cut = cut[:last_space]
+    return cut.rstrip(" ,;:-") + "..."
+
+
+def _slugify(text):
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = re.sub(r"[^\w\s-]", "", text.lower())
+    text = re.sub(r"[\s_-]+", "-", text).strip("-")
+    return text
+
+
+def build_seo_payload(article, generated, final_image="", image_origin=""):
+    """
+    Monta todo o pacote de SEO para o post do Blogger.
+
+    Retorna dict com:
+      - title: título final com sufixo da marca
+      - search_description: meta description (customMetaData + JSON-LD)
+      - meta_description: description para <meta name="description">
+      - labels: lista de labels otimizadas
+      - keywords: string com palavras-chave separadas por vírgula
+      - canonical: URL canônica (a do post final, preenchida depois)
+      - source_url: URL da fonte original
+      - schema: JSON-LD NewsArticle
+      - breadcrumb: JSON-LD BreadcrumbList
+      - open_graph / twitter: dados para meta tags
+      - html_head: bloco HTML com <meta> tags e JSON-LD
+    """
+    titulo_base = str(generated.get("titulo", "")).strip()
+    resumo = str(generated.get("resumo", "")).strip()
+    materia = str(generated.get("materia", "")).strip()
+    assunto = str(generated.get("assunto_principal", "")).strip()
+    categoria_seo = str(generated.get("categoria_seo", "")).strip()
+    palavras = list(generated.get("palavras_chave", []) or [])
+
+    # Título SEO
+    title = titulo_base
+    if SEO_TITLE_SUFFIX and not title.lower().endswith(SEO_TITLE_SUFFIX.lower()):
+        title = f"{titulo_base}{SEO_TITLE_SUFFIX}"
+
+    # Description
+    base_desc = resumo or _strip_html(materia)[:SEO_DESCRIPTION_MAX]
+    description = _truncate(base_desc, SEO_DESCRIPTION_MAX)
+
+    # Keywords
+    kw = []
+    if assunto:
+        kw.append(assunto)
+    if categoria_seo:
+        kw.append(categoria_seo)
+    for p in palavras:
+        p = str(p).strip()
+        if p and p.lower() not in {k.lower() for k in kw}:
+            kw.append(p)
+    for fallback in ("música gospel", "gospel", "notícias gospel", BLOG_NAME):
+        if fallback.lower() not in {k.lower() for k in kw}:
+            kw.append(fallback)
+    keywords = ", ".join(kw[:SEO_KEYWORDS_MAX])
+
+    # Labels
+    labels = ["Notícias", "Rádio Luz Gospel"]
+    if is_music_related(article=article, generated=generated):
+        labels.insert(1, "Músicas")
+    if categoria_seo:
+        cat_clean = re.sub(r"\s+", " ", categoria_seo).strip()
+        if cat_clean and cat_clean not in labels:
+            labels.append(cat_clean)
+    if assunto:
+        assunto_clean = re.sub(r"\s+", " ", assunto).strip()
+        if assunto_clean and assunto_clean not in labels and len(assunto_clean) <= 40:
+            labels.append(assunto_clean)
+    if article.get("date"):
+        labels.append(str(article["date"].year))
+    # Limita e remove duplicatas mantendo ordem
+    seen = set()
+    labels_final = []
+    for l in labels:
+        l = str(l).strip()
+        if not l:
+            continue
+        key = l.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        labels_final.append(l)
+    labels_final = labels_final[:10]
+
+    # Imagem
+    image_url = final_image or article.get("image", "")
+
+    # Canonical (será preenchido após o insert, com a URL real)
+    canonical = article.get("url", "")
+
+    # Schema JSON-LD
+    published = (article.get("date") or datetime.now()).isoformat()
+    date_modified = datetime.now().isoformat()
+    description_schema = description
+    schema = {
+        "@context": "https://schema.org",
+        "@type": "NewsArticle",
+        "mainEntityOfPage": {
+            "@type": "WebPage",
+            "@id": canonical,
+        },
+        "headline": titulo_base[:110],
+        "description": description_schema,
+        "image": [image_url] if image_url else [],
+        "datePublished": published,
+        "dateModified": date_modified,
+        "author": {
+            "@type": "Organization",
+            "name": BLOG_NAME,
+            "url": BLOG_HOME_URL,
+        },
+        "publisher": {
+            "@type": "Organization",
+            "name": BLOG_NAME,
+            "url": BLOG_HOME_URL,
+            "logo": {
+                "@type": "ImageObject",
+                "url": image_url or f"{BLOG_HOME_URL}/favicon.ico",
+            },
+        },
+        "articleSection": categoria_seo or ("Música Gospel" if is_music_related(article=article, generated=generated) else "Notícias Gospel"),
+        "keywords": keywords,
+        "inLanguage": "pt-BR",
+        "isAccessibleForFree": True,
+        "url": canonical,
+        "sourceOrganization": {
+            "@type": "Organization",
+            "name": article.get("source_name", "") or urlparse(article.get("url", "")).netloc,
+            "url": article.get("url", ""),
+        },
+    }
+
+    breadcrumb = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Início", "item": BLOG_HOME_URL},
+            {"@type": "ListItem", "position": 2, "name": "Notícias", "item": f"{BLOG_HOME_URL}/search/label/Not%C3%ADcias"},
+            {"@type": "ListItem", "position": 3, "name": titulo_base[:80], "item": canonical},
+        ],
+    }
+
+    # Bloco HTML de SEO (meta tags + JSON-LD)
     safe_title = (
-        generated["titulo"]
+        title.replace("&", "&amp;").replace("<", "&lt;")
+        .replace(">", "&gt;").replace('"', "&quot;")
+    )
+    safe_desc = (
+        description.replace("&", "&amp;").replace("<", "&lt;")
+        .replace(">", "&gt;").replace('"', "&quot;")
+    )
+    safe_keywords = (
+        keywords.replace("&", "&amp;").replace('"', "&quot;")
+    )
+    safe_canonical = (
+        canonical.replace("&", "&amp;").replace('"', "&quot;")
+    )
+    safe_image = (
+        (image_url or "").replace("&", "&amp;").replace('"', "&quot;")
+    )
+    safe_og_type = "article"
+    safe_locale = BLOG_LOCALE.replace("_", "_")
+    twitter_card = "summary_large_image"
+    twitter_site = f'<meta name="twitter:site" content="{BLOG_TWITTER}">' if BLOG_TWITTER else ""
+
+    json_ld_article = json.dumps(schema, ensure_ascii=False)
+    json_ld_breadcrumb = json.dumps(breadcrumb, ensure_ascii=False)
+
+    html_head = f"""<!-- ===== SEO RÁDIO LUZ GOSPEL ===== -->
+<title>{safe_title}</title>
+<meta name="description" content="{safe_desc}">
+<meta name="keywords" content="{safe_keywords}">
+<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
+<meta name="author" content="{BLOG_NAME}">
+<meta name="language" content="Portuguese">
+<meta name="revisit-after" content="1 days">
+<meta name="rating" content="general">
+<meta name="distribution" content="global">
+<link rel="canonical" href="{safe_canonical}">
+
+<!-- Open Graph -->
+<meta property="og:type" content="{safe_og_type}">
+<meta property="og:site_name" content="{BLOG_NAME}">
+<meta property="og:title" content="{safe_title}">
+<meta property="og:description" content="{safe_desc}">
+<meta property="og:url" content="{safe_canonical}">
+<meta property="og:locale" content="{safe_locale}">
+{f'<meta property="og:image" content="{safe_image}">' if safe_image else ''}
+{f'<meta property="og:image:width" content="1200">' if safe_image else ''}
+{f'<meta property="og:image:height" content="630">' if safe_image else ''}
+<meta property="article:published_time" content="{published}">
+<meta property="article:modified_time" content="{date_modified}">
+<meta property="article:section" content="{schema['articleSection']}">
+{f'<meta property="article:tag" content="{assunto}">' if assunto else ''}
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="{twitter_card}">
+<meta name="twitter:title" content="{safe_title}">
+<meta name="twitter:description" content="{safe_desc}">
+{f'<meta name="twitter:image" content="{safe_image}">' if safe_image else ''}
+{twitter_site}
+
+<!-- Schema.org NewsArticle -->
+<script type="application/ld+json">{json_ld_article}</script>
+
+<!-- Schema.org BreadcrumbList -->
+<script type="application/ld+json">{json_ld_breadcrumb}</script>
+<!-- ===== FIM SEO ===== -->"""
+
+    return {
+        "title": title,
+        "titulo_base": titulo_base,
+        "description": description,
+        "keywords": keywords,
+        "labels": labels_final,
+        "canonical": canonical,
+        "schema": schema,
+        "breadcrumb": breadcrumb,
+        "html_head": html_head,
+        "source_url": article.get("url", ""),
+        "assunto": assunto,
+        "categoria_seo": categoria_seo,
+    }
+
+
+def build_seo_head_for_blogger(seo):
+    """
+    O Blogger já injeta seu próprio <head>, então colocamos o bloco SEO
+    no início do conteúdo do post. O Blogger aceita HTML no content.
+    """
+    return seo.get("html_head", "")
+
+
+# ============================================================
+# HTML DO POST
+# ============================================================
+
+def html(article, generated, final_image="", image_origin="", seo=None):
+    seo = seo or {}
+    titulo_exibicao = seo.get("titulo_base") or generated.get("titulo", "")
+    safe_title = (
+        titulo_exibicao
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
@@ -1160,15 +1412,25 @@ def html(article, generated, final_image="", image_origin=""):
         .replace('"', "&quot;")
     )
 
-    content = [
+    seo_head = build_seo_head_for_blogger(seo)
+
+    content = []
+
+    # Bloco SEO no topo (meta tags + JSON-LD)
+    if seo_head:
+        content.append(seo_head)
+
+    content.extend([
         f'<p><strong>{generated["resumo"]}</strong></p>',
         (
             f'<p><img src="{safe_image}" '
             f'alt="{safe_title}" '
+            f'title="{safe_title}" '
+            f'width="1200" height="630" '
             f'style="max-width:100%;height:auto;border-radius:12px;">'
             f'</p>'
         ),
-    ]
+    ])
 
     # ===== BANNER ESTÁCIO (após o 2º parágrafo) =====
     estacio_banner = (
@@ -1197,7 +1459,7 @@ def html(article, generated, final_image="", image_origin=""):
         '<img '
         'src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjoGW9SVc649gUeuASULSbXdIlDodpSI1Vt6F8n1blkocLn3rBo2439MzRacnHLURBIE7E1x-zKPRxnxNd38tlpIDo0jYPyvB_XxrpEHpqCjpaGU57e9jf1I5L1hVg00ehMgL9gZWYT_jrvZjitvycwlWTSkXXyboOZzy98mzkGMGHKTiUH84-lD63mprI/s1200/Estacio%20Banner.png" '
         'alt="Banner Estácio - Graduação e Pós-Graduação com bolsas de estudo" '
-        'loading="lazy">'
+        'loading="lazy" width="1200" height="140">'
         '</a>'
         '</div>'
         '<!-- ===== FIM BANNER ESTÁCIO ===== -->'
@@ -1215,8 +1477,7 @@ def html(article, generated, final_image="", image_origin=""):
         if index == 1:
             content.append(estacio_banner)
 
-    # ===== VÍDEOS — imediatamente após o último parágrafo =====
-    # Container responsivo 16:9, sem <p> envolvente, sem espaço fantasma.
+    # ===== VÍDEOS =====
     for video_url in article["videos"]:
         content.append(
             '<div style="margin:24px 0;padding:0;">'
@@ -1237,7 +1498,7 @@ def html(article, generated, final_image="", image_origin=""):
             '</div>'
         )
 
-    # ===== Bloco Spotify — depois dos vídeos =====
+    # ===== Bloco Spotify =====
     spotify_block = (
         '<div style="max-width:600px;margin:2rem auto;padding:0 1rem;">'
         '<h3 style="text-align:center;color:#1DB954;font-family:Arial,sans-serif;margin-bottom:1rem;">'
@@ -1248,7 +1509,7 @@ def html(article, generated, final_image="", image_origin=""):
         'src="https://open.spotify.com/embed/playlist/14OteRoEl6CVEsTCpYCYyx?utm_source=generator" '
         'width="100%" height="380" frameborder="0" allowfullscreen="" '
         'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
-        'loading="lazy"></iframe>'
+        'loading="lazy" title="Playlist Rádio Luz Gospel no Spotify"></iframe>'
         '<p style="text-align:center;margin-top:0.8rem;font-size:0.95rem;color:#666;font-family:Arial,sans-serif;">'
         'Ouça a seleção especial da <strong>Rádio Luz Gospel</strong> 📻🙏'
         '</p>'
@@ -1256,7 +1517,7 @@ def html(article, generated, final_image="", image_origin=""):
     )
     content.append(spotify_block)
 
-    # ===== Bloco Telegram — por último =====
+    # ===== Bloco Telegram =====
     telegram_channel = os.getenv(
         "TELEGRAM_CHANNEL_URL",
         "https://t.me/radioluzgospelnoticias",
@@ -1287,7 +1548,14 @@ def html(article, generated, final_image="", image_origin=""):
     if image_origin:
         image_marker = f"\n<!-- RADIO_LUZ_GOSPEL_IMAGE_SOURCE: {image_origin} -->"
 
-    return "\n".join(content) + "\n" + source_marker + image_marker
+    seo_marker = ""
+    if seo:
+        seo_marker = (
+            f"\n<!-- RADIO_LUZ_GOSPEL_SEO_DESCRIPTION: {seo.get('description','')[:300]} -->"
+            f"\n<!-- RADIO_LUZ_GOSPEL_SEO_KEYWORDS: {seo.get('keywords','')[:300]} -->"
+        )
+
+    return "\n".join(content) + "\n" + source_marker + image_marker + seo_marker
 
 
 def main():
@@ -1361,28 +1629,66 @@ def main():
         image_origin = f"Sequência: {chosen_file}"
         print(f"✓ Imagem final: {image_origin}")
 
+        # ===== SEO automático =====
+        seo = build_seo_payload(
+            article=article,
+            generated=generated,
+            final_image=final_image,
+            image_origin=image_origin,
+        )
+        print(f"✓ SEO: título final = {seo['title'][:90]}")
+        print(f"✓ SEO: description = {seo['description'][:120]}...")
+        print(f"✓ SEO: keywords = {seo['keywords'][:160]}")
+        print(f"✓ Labels: {', '.join(seo['labels'])}")
+
         try:
-            post_labels = ["Notícias", "Rádio Luz Gospel"]
-            if is_music_related(article=article, generated=generated):
-                post_labels.insert(1, "Músicas")
+            post_body = {
+                "title": seo["title"].strip(),
+                "content": html(article, generated, final_image=final_image,
+                                image_origin=image_origin, seo=seo),
+                "labels": seo["labels"],
+            }
+
+            # customMetaData: alguns fluxos do Blogger leem como search description
+            # (campo suportado indiretamente pela API v3 em algumas contas).
+            try:
+                post_body["customMetaData"] = seo["description"]
+            except Exception:
+                pass
 
             response = api.posts().insert(
                 blogId=BLOGGER_BLOG_ID,
-                body={
-                    "title": generated["titulo"].strip(),
-                    "content": html(article, generated, final_image=final_image, image_origin=image_origin),
-                    "labels": post_labels,
-                },
+                body=post_body,
                 isDraft=False,
             ).execute()
+
             published += 1
             old_source_urls.add(normalized)
             if response.get("url"):
                 old_blog_urls.add(normalize_url(response["url"]))
-            print(f"✓ Publicada: {generated['titulo'].strip()}")
-        except Exception:
+                # Se o Blogger retornou URL, atualiza o canonical no post
+                try:
+                    new_url = response["url"]
+                    if new_url and new_url != seo["canonical"]:
+                        updated_content = html(
+                            article, generated,
+                            final_image=final_image,
+                            image_origin=image_origin,
+                            seo={**seo, "canonical": new_url},
+                        )
+                        api.posts().patch(
+                            blogId=BLOGGER_BLOG_ID,
+                            postId=response["id"],
+                            body={"content": updated_content},
+                        ).execute()
+                        print(f"✓ SEO: canonical atualizado para {new_url}")
+                except Exception as canon_exc:
+                    print(f"⚠ SEO: não foi possível atualizar canonical: {canon_exc}")
+
+            print(f"✓ Publicada: {seo['title'].strip()}")
+        except Exception as exc:
             failed += 1
-            print("⚠ Blogger: falha ao publicar")
+            print(f"⚠ Blogger: falha ao publicar ({str(exc)[:200]})")
 
     print("RESULTADO")
     print(f"Publicações: {published}")
@@ -1815,7 +2121,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.52 ATIVA: vídeos (apenas reais) logo após o último parágrafo | Spotify em seguida | Telegram por último | Banner Estácio após o 2º parágrafo | sequência cíclica de 12 imagens")
+print("VERSÃO 12.53 ATIVA: SEO automático (meta description, keywords, Open Graph, Twitter Card, Schema.org NewsArticle + Breadcrumb, labels otimizadas) | vídeos após o último parágrafo | Spotify em seguida | Telegram por último | Banner Estácio após o 2º parágrafo | sequência cíclica de 12 imagens")
 
 _before_urls = set()
 if PROMO_ENABLED:
