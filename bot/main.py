@@ -841,7 +841,10 @@ def gemini_request(client, model, prompt):
                 raise
             delay = GEMINI_RETRY_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0, 2)
             time.sleep(delay)
-    raise last_errordef norm_words(text):
+    raise last_error
+
+
+def norm_words(text):
     text = unicodedata.normalize("NFKD", text or "")
     text = "".join(c for c in text if not unicodedata.combining(c)).lower()
     return re.findall(r"[a-z0-9]+", text)
@@ -1164,22 +1167,6 @@ def _slugify(text):
 
 
 def build_seo_payload(article, generated, final_image="", image_origin=""):
-    """
-    Monta todo o pacote de SEO para o post do Blogger.
-
-    Retorna dict com:
-      - title: título final com sufixo da marca
-      - search_description: meta description (customMetaData + JSON-LD)
-      - meta_description: description para <meta name="description">
-      - labels: lista de labels otimizadas
-      - keywords: string com palavras-chave separadas por vírgula
-      - canonical: URL canônica (a do post final, preenchida depois)
-      - source_url: URL da fonte original
-      - schema: JSON-LD NewsArticle
-      - breadcrumb: JSON-LD BreadcrumbList
-      - open_graph / twitter: dados para meta tags
-      - html_head: bloco HTML com <meta> tags e JSON-LD
-    """
     titulo_base = str(generated.get("titulo", "")).strip()
     resumo = str(generated.get("resumo", "")).strip()
     materia = str(generated.get("materia", "")).strip()
@@ -1187,16 +1174,13 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
     categoria_seo = str(generated.get("categoria_seo", "")).strip()
     palavras = list(generated.get("palavras_chave", []) or [])
 
-    # Título SEO
     title = titulo_base
     if SEO_TITLE_SUFFIX and not title.lower().endswith(SEO_TITLE_SUFFIX.lower()):
         title = f"{titulo_base}{SEO_TITLE_SUFFIX}"
 
-    # Description
     base_desc = resumo or _strip_html(materia)[:SEO_DESCRIPTION_MAX]
     description = _truncate(base_desc, SEO_DESCRIPTION_MAX)
 
-    # Keywords
     kw = []
     if assunto:
         kw.append(assunto)
@@ -1211,7 +1195,6 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
             kw.append(fallback)
     keywords = ", ".join(kw[:SEO_KEYWORDS_MAX])
 
-    # Labels
     labels = ["Notícias", "Rádio Luz Gospel"]
     if is_music_related(article=article, generated=generated):
         labels.insert(1, "Músicas")
@@ -1225,7 +1208,7 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
             labels.append(assunto_clean)
     if article.get("date"):
         labels.append(str(article["date"].year))
-    # Limita e remove duplicatas mantendo ordem
+
     seen = set()
     labels_final = []
     for l in labels:
@@ -1239,16 +1222,12 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
         labels_final.append(l)
     labels_final = labels_final[:10]
 
-    # Imagem
     image_url = final_image or article.get("image", "")
-
-    # Canonical (será preenchido após o insert, com a URL real)
     canonical = article.get("url", "")
 
-    # Schema JSON-LD
     published = (article.get("date") or datetime.now()).isoformat()
     date_modified = datetime.now().isoformat()
-    description_schema = description
+
     schema = {
         "@context": "https://schema.org",
         "@type": "NewsArticle",
@@ -1257,7 +1236,7 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
             "@id": canonical,
         },
         "headline": titulo_base[:110],
-        "description": description_schema,
+        "description": description,
         "image": [image_url] if image_url else [],
         "datePublished": published,
         "dateModified": date_modified,
@@ -1282,7 +1261,7 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
         "url": canonical,
         "sourceOrganization": {
             "@type": "Organization",
-            "name": article.get("source_name", "") or urlparse(article.get("url", "")).netloc,
+            "name": urlparse(article.get("url", "")).netloc,
             "url": article.get("url", ""),
         },
     }
@@ -1297,7 +1276,6 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
         ],
     }
 
-    # Bloco HTML de SEO (meta tags + JSON-LD)
     safe_title = (
         title.replace("&", "&amp;").replace("<", "&lt;")
         .replace(">", "&gt;").replace('"', "&quot;")
@@ -1315,9 +1293,6 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
     safe_image = (
         (image_url or "").replace("&", "&amp;").replace('"', "&quot;")
     )
-    safe_og_type = "article"
-    safe_locale = BLOG_LOCALE.replace("_", "_")
-    twitter_card = "summary_large_image"
     twitter_site = f'<meta name="twitter:site" content="{BLOG_TWITTER}">' if BLOG_TWITTER else ""
 
     json_ld_article = json.dumps(schema, ensure_ascii=False)
@@ -1336,12 +1311,12 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
 <link rel="canonical" href="{safe_canonical}">
 
 <!-- Open Graph -->
-<meta property="og:type" content="{safe_og_type}">
+<meta property="og:type" content="article">
 <meta property="og:site_name" content="{BLOG_NAME}">
 <meta property="og:title" content="{safe_title}">
 <meta property="og:description" content="{safe_desc}">
 <meta property="og:url" content="{safe_canonical}">
-<meta property="og:locale" content="{safe_locale}">
+<meta property="og:locale" content="{BLOG_LOCALE}">
 {f'<meta property="og:image" content="{safe_image}">' if safe_image else ''}
 {f'<meta property="og:image:width" content="1200">' if safe_image else ''}
 {f'<meta property="og:image:height" content="630">' if safe_image else ''}
@@ -1351,7 +1326,7 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
 {f'<meta property="article:tag" content="{assunto}">' if assunto else ''}
 
 <!-- Twitter Card -->
-<meta name="twitter:card" content="{twitter_card}">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="{safe_title}">
 <meta name="twitter:description" content="{safe_desc}">
 {f'<meta name="twitter:image" content="{safe_image}">' if safe_image else ''}
@@ -1381,10 +1356,6 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
 
 
 def build_seo_head_for_blogger(seo):
-    """
-    O Blogger já injeta seu próprio <head>, então colocamos o bloco SEO
-    no início do conteúdo do post. O Blogger aceita HTML no content.
-    """
     return seo.get("html_head", "")
 
 
@@ -1416,7 +1387,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 
     content = []
 
-    # Bloco SEO no topo (meta tags + JSON-LD)
     if seo_head:
         content.append(seo_head)
 
@@ -1432,7 +1402,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         ),
     ])
 
-    # ===== BANNER ESTÁCIO (após o 2º parágrafo) =====
     estacio_banner = (
         '<!-- ===== BANNER ESTÁCIO ===== -->'
         '<div id="estacio-banner-img">'
@@ -1465,7 +1434,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         '<!-- ===== FIM BANNER ESTÁCIO ===== -->'
     )
 
-    # ===== Corpo da matéria =====
     article_paragraphs = []
     for paragraph in re.split(r"\n+", generated["materia"]):
         paragraph = paragraph.strip()
@@ -1477,7 +1445,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         if index == 1:
             content.append(estacio_banner)
 
-    # ===== VÍDEOS =====
     for video_url in article["videos"]:
         content.append(
             '<div style="margin:24px 0;padding:0;">'
@@ -1498,7 +1465,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
             '</div>'
         )
 
-    # ===== Bloco Spotify =====
     spotify_block = (
         '<div style="max-width:600px;margin:2rem auto;padding:0 1rem;">'
         '<h3 style="text-align:center;color:#1DB954;font-family:Arial,sans-serif;margin-bottom:1rem;">'
@@ -1517,7 +1483,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     )
     content.append(spotify_block)
 
-    # ===== Bloco Telegram =====
     telegram_channel = os.getenv(
         "TELEGRAM_CHANNEL_URL",
         "https://t.me/radioluzgospelnoticias",
@@ -1629,7 +1594,6 @@ def main():
         image_origin = f"Sequência: {chosen_file}"
         print(f"✓ Imagem final: {image_origin}")
 
-        # ===== SEO automático =====
         seo = build_seo_payload(
             article=article,
             generated=generated,
@@ -1649,8 +1613,6 @@ def main():
                 "labels": seo["labels"],
             }
 
-            # customMetaData: alguns fluxos do Blogger leem como search description
-            # (campo suportado indiretamente pela API v3 em algumas contas).
             try:
                 post_body["customMetaData"] = seo["description"]
             except Exception:
@@ -1666,7 +1628,6 @@ def main():
             old_source_urls.add(normalized)
             if response.get("url"):
                 old_blog_urls.add(normalize_url(response["url"]))
-                # Se o Blogger retornou URL, atualiza o canonical no post
                 try:
                     new_url = response["url"]
                     if new_url and new_url != seo["canonical"]:
