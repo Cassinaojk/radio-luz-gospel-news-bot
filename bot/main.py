@@ -54,7 +54,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.54 (SEO Automático)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.55 (SEO Automático + Proxy de Imagem)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -318,7 +318,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.54)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.55)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -504,12 +504,11 @@ def videos(x):
 
 
 # ============================================================
-# SEQUÊNCIA DE IMAGENS (CORRIGIDA)
+# SEQUÊNCIA DE IMAGENS (COM PROXY)
 # ============================================================
 
 def _detect_default_branch():
-    """Detecta a branch padrão do repositório via API pública do GitHub.
-    Cacheado para não repetir a chamada em cada imagem."""
+    """Detecta a branch padrão do repositório via API pública do GitHub."""
     if _default_branch_cache["value"]:
         return _default_branch_cache["value"]
 
@@ -523,7 +522,7 @@ def _detect_default_branch():
             f"https://api.github.com/repos/{repository}",
             timeout=12,
             headers={
-                "User-Agent": "RadioLuzGospel/12.54",
+                "User-Agent": "RadioLuzGospel/12.55",
                 "Accept": "application/vnd.github+json",
             },
         )
@@ -542,14 +541,7 @@ def _detect_default_branch():
 
 
 def _build_image_candidates(relative_path):
-    """Monta lista de URLs candidatas para a imagem, tentando:
-    1) GITHUB_SHA (fixo, mais confiável)
-    2) branch atual (GITHUB_REF_NAME)
-    3) branch padrão detectada
-    4) 'main'
-    5) 'master'
-    Em cada branch tenta jsdelivr e raw.githubusercontent.
-    """
+    """Monta lista de URLs candidatas para a imagem."""
     repository = os.getenv("GITHUB_REPOSITORY", "").strip()
     if not repository:
         return []
@@ -559,7 +551,6 @@ def _build_image_candidates(relative_path):
 
     candidates = []
 
-    # 1) SHA fixo — sempre presente no Actions e imutável
     sha = os.getenv("GITHUB_SHA", "").strip()
     if sha:
         candidates.append(
@@ -569,7 +560,6 @@ def _build_image_candidates(relative_path):
             f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{sha}/{path_encoded}"
         )
 
-    # 2) branches — evita duplicatas mantendo ordem
     branches = []
     for b in (
         os.getenv("GITHUB_REF_NAME", "").strip(),
@@ -593,6 +583,11 @@ def _build_image_candidates(relative_path):
 
 
 def resolve_repo_image_url(relative_path):
+    """
+    Valida a imagem no GitHub e retorna uma URL PROXY (wsrv.nl) para o Blogger.
+    O proxy garante que a imagem seja servida de um domínio acessível ao Blogger,
+    evitando bloqueios de hotlink/DNS do raw.githubusercontent.com e do jsdelivr.
+    """
     if not relative_path:
         return ""
     if relative_path in _image_url_cache:
@@ -604,27 +599,40 @@ def resolve_repo_image_url(relative_path):
         _image_url_cache[relative_path] = ""
         return ""
 
+    # Valida a imagem no GitHub (qualquer candidato 200 + image/* serve)
+    valid_original_url = ""
     last_status = ""
     for candidate in candidates:
         try:
             r = requests.get(
                 candidate, stream=True, timeout=20,
-                headers={"User-Agent": "RadioLuzGospel/12.54"},
+                headers={"User-Agent": "RadioLuzGospel/12.55"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
             if status == 200 and content_type.startswith("image/"):
-                print(f"✓ Imagem sequencial: {relative_path} → {candidate}")
-                _image_url_cache[relative_path] = candidate
-                return candidate
+                valid_original_url = candidate
+                break
             last_status = f"{status}/{content_type.split(';')[0].strip()}"
         except Exception as exc:
             last_status = f"erro: {str(exc)[:80]}"
 
-    print(f"⚠ Imagem sequencial indisponível: {relative_path} (última resposta: {last_status}; tentativas: {len(candidates)})")
-    _image_url_cache[relative_path] = ""
-    return ""
+    if not valid_original_url:
+        print(f"⚠ Imagem indisponível: {relative_path} (última resposta: {last_status}; tentativas: {len(candidates)})")
+        _image_url_cache[relative_path] = ""
+        return ""
+
+    # Constrói URL do proxy wsrv.nl com a imagem original validada.
+    # Força output=jpg para garantir Content-Type image/jpeg universal.
+    proxied_url = (
+        "https://wsrv.nl/?"
+        f"url={quote(valid_original_url, safe='')}"
+        "&output=jpg&q=90&w=1200"
+    )
+    print(f"✓ Imagem sequencial (proxy): {relative_path} → {proxied_url}")
+    _image_url_cache[relative_path] = proxied_url
+    return proxied_url
 
 
 def pick_next_image_url(posts_count):
@@ -2127,7 +2135,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.54 ATIVA: SEO automático | vídeos | Spotify | Telegram | banner Estácio removido | sequência cíclica de 12 imagens com fallback (SHA + branch padrão + main + master)")
+print("VERSÃO 12.55 ATIVA: SEO automático | vídeos | Spotify | Telegram | banner Estácio removido | imagens do repositório via proxy wsrv.nl (contorna bloqueio do Blogger)")
 
 _before_urls = set()
 if PROMO_ENABLED:
