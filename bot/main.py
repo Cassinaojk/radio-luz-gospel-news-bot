@@ -24,14 +24,14 @@ def print(*args, **kwargs):
         or message.startswith("Ignoradas:")
         or message.startswith("Falhas:")
         or message.startswith("✓ Publicada:")
-        or message.startswith("✓ Imagem:")
+        or message.startswith("✓ Imagem")
         or message.startswith("✓ Fallback:")
         or message.startswith("✓ SEO:")
         or message.startswith("✓ Labels:")
         or message.startswith("⚠ Blogger:")
         or message.startswith("⚠ IA:")
         or message.startswith("⚠ Gemini:")
-        or message.startswith("⚠ Imagem:")
+        or message.startswith("⚠ Imagem")
         or message.startswith("⚠ Fallback:")
         or message.startswith("⚠ Pulada:")
         or message.startswith("⚠ Divulgação:")
@@ -54,7 +54,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.53 (SEO Automático)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.54 (SEO Automático)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -318,12 +318,13 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.53)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.54)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
 _ai_config_logged = False
 _image_url_cache = {}
+_default_branch_cache = {"value": ""}
 
 
 def normalize_url(u):
@@ -503,8 +504,93 @@ def videos(x):
 
 
 # ============================================================
-# SEQUÊNCIA DE IMAGENS
+# SEQUÊNCIA DE IMAGENS (CORRIGIDA)
 # ============================================================
+
+def _detect_default_branch():
+    """Detecta a branch padrão do repositório via API pública do GitHub.
+    Cacheado para não repetir a chamada em cada imagem."""
+    if _default_branch_cache["value"]:
+        return _default_branch_cache["value"]
+
+    repository = os.getenv("GITHUB_REPOSITORY", "").strip()
+    if not repository:
+        _default_branch_cache["value"] = "main"
+        return "main"
+
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{repository}",
+            timeout=12,
+            headers={
+                "User-Agent": "RadioLuzGospel/12.54",
+                "Accept": "application/vnd.github+json",
+            },
+        )
+        if r.status_code == 200:
+            branch = (r.json() or {}).get("default_branch", "") or ""
+            if branch:
+                _default_branch_cache["value"] = branch
+                print(f"✓ Imagem: branch padrão detectada = {branch}")
+                return branch
+        print(f"⚠ Imagem: não foi possível detectar branch padrão (HTTP {r.status_code}); usando 'main'")
+    except Exception as exc:
+        print(f"⚠ Imagem: erro ao detectar branch padrão: {exc}")
+
+    _default_branch_cache["value"] = "main"
+    return "main"
+
+
+def _build_image_candidates(relative_path):
+    """Monta lista de URLs candidatas para a imagem, tentando:
+    1) GITHUB_SHA (fixo, mais confiável)
+    2) branch atual (GITHUB_REF_NAME)
+    3) branch padrão detectada
+    4) 'main'
+    5) 'master'
+    Em cada branch tenta jsdelivr e raw.githubusercontent.
+    """
+    repository = os.getenv("GITHUB_REPOSITORY", "").strip()
+    if not repository:
+        return []
+
+    repo_encoded = quote(repository, safe="/")
+    path_encoded = quote(relative_path, safe="/")
+
+    candidates = []
+
+    # 1) SHA fixo — sempre presente no Actions e imutável
+    sha = os.getenv("GITHUB_SHA", "").strip()
+    if sha:
+        candidates.append(
+            f"https://raw.githubusercontent.com/{repo_encoded}/{sha}/{path_encoded}"
+        )
+        candidates.append(
+            f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{sha}/{path_encoded}"
+        )
+
+    # 2) branches — evita duplicatas mantendo ordem
+    branches = []
+    for b in (
+        os.getenv("GITHUB_REF_NAME", "").strip(),
+        _detect_default_branch(),
+        "main",
+        "master",
+    ):
+        if b and b not in branches:
+            branches.append(b)
+
+    for branch in branches:
+        branch_encoded = quote(branch, safe="")
+        candidates.append(
+            f"https://raw.githubusercontent.com/{repo_encoded}/{branch_encoded}/{path_encoded}"
+        )
+        candidates.append(
+            f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/{path_encoded}"
+        )
+
+    return candidates
+
 
 def resolve_repo_image_url(relative_path):
     if not relative_path:
@@ -512,26 +598,18 @@ def resolve_repo_image_url(relative_path):
     if relative_path in _image_url_cache:
         return _image_url_cache[relative_path]
 
-    repository = os.getenv("GITHUB_REPOSITORY", "").strip()
-    branch = os.getenv("GITHUB_REF_NAME", "").strip() or "main"
-    if not repository:
+    candidates = _build_image_candidates(relative_path)
+    if not candidates:
+        print(f"⚠ Imagem: GITHUB_REPOSITORY não definido; impossível montar URL de {relative_path}")
         _image_url_cache[relative_path] = ""
         return ""
 
-    repo_encoded = quote(repository, safe="/")
-    branch_encoded = quote(branch, safe="")
-    path_encoded = quote(relative_path, safe="/")
-
-    candidates = [
-        f"https://cdn.jsdelivr.net/gh/{repo_encoded}@{branch_encoded}/{path_encoded}",
-        f"https://raw.githubusercontent.com/{repo_encoded}/{branch_encoded}/{path_encoded}",
-    ]
-
+    last_status = ""
     for candidate in candidates:
         try:
             r = requests.get(
-                candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.53"},
+                candidate, stream=True, timeout=20,
+                headers={"User-Agent": "RadioLuzGospel/12.54"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -540,10 +618,11 @@ def resolve_repo_image_url(relative_path):
                 print(f"✓ Imagem sequencial: {relative_path} → {candidate}")
                 _image_url_cache[relative_path] = candidate
                 return candidate
-            print(f"⚠ Imagem sequencial indisponível ({status}, {content_type}): {candidate}")
+            last_status = f"{status}/{content_type.split(';')[0].strip()}"
         except Exception as exc:
-            print(f"⚠ Imagem sequencial: erro ao validar {candidate}: {exc}")
+            last_status = f"erro: {str(exc)[:80]}"
 
+    print(f"⚠ Imagem sequencial indisponível: {relative_path} (última resposta: {last_status}; tentativas: {len(candidates)})")
     _image_url_cache[relative_path] = ""
     return ""
 
@@ -1554,7 +1633,7 @@ def main():
 
         final_image, chosen_file = pick_next_image_url(posts_count + published)
         if not final_image:
-            print("⚠ Imagem sequencial: nenhuma imagem acessível na pasta bot/Imagens/.")
+            print("⚠ Imagem: nenhuma imagem do repositório bot/Imagens/ foi acessível; matéria não será publicada sem imagem.")
             ignored += 1
             continue
         image_origin = f"Sequência: {chosen_file}"
@@ -2048,7 +2127,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.53 ATIVA: SEO automático (meta description, keywords, Open Graph, Twitter Card, Schema.org NewsArticle + Breadcrumb, labels otimizadas) | vídeos após o último parágrafo | Spotify em seguida | Telegram por último | banner Estácio removido | sequência cíclica de 12 imagens")
+print("VERSÃO 12.54 ATIVA: SEO automático | vídeos | Spotify | Telegram | banner Estácio removido | sequência cíclica de 12 imagens com fallback (SHA + branch padrão + main + master)")
 
 _before_urls = set()
 if PROMO_ENABLED:
