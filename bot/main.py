@@ -1402,48 +1402,14 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         ),
     ])
 
-    estacio_banner = (
-        '<!-- ===== BANNER ESTÁCIO ===== -->'
-        '<div id="estacio-banner-img">'
-        '<style>'
-        '#estacio-banner-img{display:block;width:100%;margin:22px 0;padding:0;'
-        'line-height:0;overflow:hidden;border-radius:16px;'
-        'box-shadow:0 6px 18px rgba(0,0,0,.12);}'
-        '#estacio-banner-img a{display:block;width:100%;'
-        'transition:transform .3s ease,box-shadow .3s ease;}'
-        '#estacio-banner-img img{display:block;width:100%;height:140px;'
-        'object-fit:cover;object-position:center;border:0;outline:none;'
-        'border-radius:16px;}'
-        '#estacio-banner-img a:hover img{transform:scale(1.02);}'
-        '@media (max-width:768px){'
-        '#estacio-banner-img{border-radius:12px;margin:16px 0;}'
-        '#estacio-banner-img img{height:100px;border-radius:12px;}'
-        '#estacio-banner-img a:hover img{transform:none;}}'
-        '@media (max-width:420px){'
-        '#estacio-banner-img img{height:80px;}}'
-        '</style>'
-        '<a href="https://estacio.br/selecao?cod_agente=14369444&u=723918&end=1" '
-        'target="_blank" rel="noopener sponsored" '
-        'aria-label="Cursos de Graduação e Pós na Estácio">'
-        '<img '
-        'src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEjoGW9SVc649gUeuASULSbXdIlDodpSI1Vt6F8n1blkocLn3rBo2439MzRacnHLURBIE7E1x-zKPRxnxNd38tlpIDo0jYPyvB_XxrpEHpqCjpaGU57e9jf1I5L1hVg00ehMgL9gZWYT_jrvZjitvycwlWTSkXXyboOZzy98mzkGMGHKTiUH84-lD63mprI/s1200/Estacio%20Banner.png" '
-        'alt="Banner Estácio - Graduação e Pós-Graduação com bolsas de estudo" '
-        'loading="lazy" width="1200" height="140">'
-        '</a>'
-        '</div>'
-        '<!-- ===== FIM BANNER ESTÁCIO ===== -->'
-    )
-
     article_paragraphs = []
     for paragraph in re.split(r"\n+", generated["materia"]):
         paragraph = paragraph.strip()
         if paragraph:
             article_paragraphs.append(paragraph)
 
-    for index, paragraph in enumerate(article_paragraphs):
+    for paragraph in article_paragraphs:
         content.append(f"<p>{paragraph}</p>")
-        if index == 1:
-            content.append(estacio_banner)
 
     for video_url in article["videos"]:
         content.append(
@@ -2082,7 +2048,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.53 ATIVA: SEO automático (meta description, keywords, Open Graph, Twitter Card, Schema.org NewsArticle + Breadcrumb, labels otimizadas) | vídeos após o último parágrafo | Spotify em seguida | Telegram por último | Banner Estácio após o 2º parágrafo | sequência cíclica de 12 imagens")
+print("VERSÃO 12.53 ATIVA: SEO automático (meta description, keywords, Open Graph, Twitter Card, Schema.org NewsArticle + Breadcrumb, labels otimizadas) | vídeos após o último parágrafo | Spotify em seguida | Telegram por último | sequência cíclica de 12 imagens")
 
 _before_urls = set()
 if PROMO_ENABLED:
