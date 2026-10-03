@@ -49,7 +49,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.56 (Imagem do repositório obrigatória)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.57 (Imagem do repositório obrigatória)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -80,8 +80,9 @@ INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
+# ===== Sequência de imagens (11 imagens, ciclo 1..11, 1, 2, ...) =====
+# radioluzgospel1.png foi REMOVIDA do repositório e do robô.
 IMAGE_FILES = [
-    "bot/Imagens/radioluzgospel1.png",
     "bot/Imagens/radioluzgospel2.jpg",
     "bot/Imagens/radioluzgospel3.jpg",
     "bot/Imagens/radioluzgospel4.jpg",
@@ -95,7 +96,6 @@ IMAGE_FILES = [
     "bot/Imagens/radioluzgospel12.jpg",
 ]
 
-# Repositório fixo como fallback, caso GITHUB_REPOSITORY não esteja definido
 IMAGE_REPO_FALLBACK = os.getenv("IMAGE_REPO", "Cassinaojk/radio-luz-gospel-news-bot").strip()
 
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "1"))
@@ -222,7 +222,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.56)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.57)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -373,7 +373,7 @@ def _detect_default_branch():
         r = requests.get(
             f"https://api.github.com/repos/{repository}",
             timeout=12,
-            headers={"User-Agent": "RadioLuzGospel/12.56", "Accept": "application/vnd.github+json"},
+            headers={"User-Agent": "RadioLuzGospel/12.57", "Accept": "application/vnd.github+json"},
         )
         if r.status_code == 200:
             branch = (r.json() or {}).get("default_branch", "") or ""
@@ -410,7 +410,7 @@ def _build_image_candidates(relative_path):
 def _validate_image_url(url, timeout=15):
     try:
         r = requests.get(url, stream=True, timeout=timeout,
-                         headers={"User-Agent": "RadioLuzGospel/12.56"})
+                         headers={"User-Agent": "RadioLuzGospel/12.57"})
         status = r.status_code
         ctype = (r.headers.get("Content-Type") or "").lower()
         r.close()
@@ -454,7 +454,6 @@ def resolve_repo_image_url(relative_path):
             return proxy_url
         print(f"   proxy falhou: {proxy_url[:120]}")
 
-    # Último recurso: usa a URL original do GitHub
     print(f"⚠ Imagem final (original, sem proxy): {relative_path} → {valid_original_url[:140]}")
     _image_url_cache[relative_path] = valid_original_url
     return valid_original_url
@@ -1016,7 +1015,6 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
         seen.add(key); labels_final.append(l)
     labels_final = labels_final[:10]
 
-    # IMAGEM PRINCIPAL: usa SOMENTE a imagem do repositório
     image_url = final_image
     canonical = article.get("url", "")
     published = (article.get("date") or datetime.now()).isoformat()
@@ -1129,7 +1127,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     safe_title = (titulo_exibicao.replace("&", "&amp;").replace("<", "&lt;")
                   .replace(">", "&gt;").replace('"', "&quot;"))
 
-    # IMAGEM PRINCIPAL: SOMENTE a do repositório. Sem fallback.
     image_url = final_image
     safe_image = image_url.replace("&", "&amp;").replace('"', "&quot;")
     safe_source_url = article["url"].replace("&", "&amp;").replace('"', "&quot;")
@@ -1622,7 +1619,7 @@ def promote_new_posts(before_urls):
     except Exception as exc:
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
-print("VERSÃO 12.56 ATIVA: imagem principal SEMPRE do repositório bot/Imagens/ (via proxy validado). Sem fallback para thumbnail de vídeo.")
+print("VERSÃO 12.57 ATIVA: imagem principal SEMPRE do repositório bot/Imagens/ | radioluzgospel1.png removida | sequência de 11 imagens (2 a 12)")
 
 _before_urls = set()
 if PROMO_ENABLED:
