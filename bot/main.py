@@ -54,7 +54,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.56 (Imagem original no meio 2/3 + limpeza de miniaturas)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.57 (Original só entre 2º e 3º parágrafo, sem duplicatas)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -320,7 +320,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.56)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.57)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -335,6 +335,26 @@ def normalize_url(u):
     u = u.strip().split("#")[0]
     u = u.rstrip("/")
     return u
+
+
+def _image_base_key(url):
+    """Chave para identificar a MESMA imagem mesmo em tamanhos/URLs diferentes.
+
+    Exemplos que colapsam para a mesma chave:
+      https://example.com/foto-750x500.jpg   -> example.com/foto.jpg
+      https://example.com/foto.jpg?ver=2     -> example.com/foto.jpg
+      https://www.example.com/foto.jpg       -> example.com/foto.jpg
+    """
+    if not url:
+        return ""
+    u = str(url).strip().split("#")[0].split("?")[0]
+    u = re.sub(r"^https?://", "", u, flags=re.I)
+    u = re.sub(r"^www\.", "", u, flags=re.I)
+    u = re.sub(
+        r"-\d{2,4}x\d{2,4}(\.(?:jpe?g|png|webp|gif|jpeg))$",
+        r"\1", u, flags=re.I,
+    )
+    return u.lower().rstrip("/")
 
 
 def bad_url(u):
@@ -512,10 +532,7 @@ def _inline_image_is_valid(img_el, src):
 
 
 def _is_small_image(url, min_bytes=None):
-    """Retorna True se a imagem parece pequena (miniatura/ícone).
-
-    Combina heurísticas de URL (sem rede) + verificação HEAD (com cache).
-    """
+    """Retorna True se a imagem parece pequena (miniatura/ícone)."""
     if not url:
         return True
     if min_bytes is None:
@@ -542,12 +559,11 @@ def _is_small_image(url, min_bytes=None):
         _image_size_cache[url] = True
         return True
 
-    # Verificação de tamanho real via HEAD (cacheada)
     is_small = False
     try:
         r = requests.head(
             url, timeout=6, allow_redirects=True,
-            headers={"User-Agent": "RadioLuzGospel/12.56"},
+            headers={"User-Agent": "RadioLuzGospel/12.57"},
         )
         if r.status_code == 200:
             size = 0
@@ -566,15 +582,14 @@ def _is_small_image(url, min_bytes=None):
 
 def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
                           max_images=None, main_image_url=""):
-    """Extrai imagens do corpo da matéria original, preservando a posição
-    relativa aos parágrafos válidos.
+    """Extrai imagens do corpo da matéria original.
 
-    - A imagem principal (og:image do artigo) é FORÇADA para a posição 2
-      (entre o 2º e o 3º parágrafos).
+    REGRAS CRÍTICAS:
+    - A imagem ORIGINAL (og:image) é SEMPRE posicionada entre o 2º e o 3º
+      parágrafo (after_paragraph=2), aparecendo UMA ÚNICA VEZ, mesmo que na
+      origem apareça em tamanhos diferentes (ex.: foto.jpg e foto-750x500.jpg).
     - Miniaturas/ícones/imagens pequenas são descartadas.
-    - Fallback por posição "9999" foi removido (não gera mais imagens soltas no fim).
-
-    Retorna: [{"url": "...", "after_paragraph": N}, ...]
+    - Imagens que não puderam ser posicionadas NÃO são jogadas ao fim.
     """
     if max_images is None:
         max_images = MAX_INLINE_IMAGES
@@ -582,6 +597,8 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
     inline_images = []
     seen_urls = set()
     para_count = 0
+
+    main_key = _image_base_key(main_image_url) if main_image_url else ""
 
     def process_img(img_el, position):
         src = (
@@ -625,33 +642,44 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
 
     walk(box)
 
-    # --- Forçar a imagem ORIGINAL (og:image) para a posição 2 ---
-    main_norm = normalize_url(main_image_url) if main_image_url else ""
-    if main_image_url:
-        main_found = False
-        deduped = []
+    # ---------------------------------------------------------
+    # IMAGEM ORIGINAL: sempre em after_paragraph=2, uma única vez
+    # ---------------------------------------------------------
+    if main_key:
+        main_kept = False
+        cleaned = []
         for img in inline_images:
-            if normalize_url(img["url"]) == main_norm:
-                if not main_found:
-                    img["after_paragraph"] = 2
-                    main_found = True
-                    deduped.append(img)
-                # duplicatas da mesma URL são descartadas
+            img_key = _image_base_key(img["url"])
+            if img_key == main_key:
+                if not main_kept:
+                    cleaned.append({
+                        "url": main_image_url,   # usa URL ORIGINAL (melhor qualidade)
+                        "after_paragraph": 2,
+                        "is_main": True,
+                    })
+                    main_kept = True
+                # variantes redimensionadas da mesma imagem são descartadas
             else:
-                deduped.append(img)
-        inline_images = deduped
-        if not main_found:
+                img["is_main"] = False
+                cleaned.append(img)
+        inline_images = cleaned
+
+        if not main_kept:
             inline_images.append({
                 "url": main_image_url,
                 "after_paragraph": 2,
+                "is_main": True,
             })
-            seen_urls.add(main_norm)
 
-    # --- Remover imagens pequenas (exceto a imagem principal) ---
+        if _VERBOSE_LOG:
+            print(f"✓ Imagem original forçada para after_paragraph=2: {main_image_url[:90]}")
+
+    # ---------------------------------------------------------
+    # Remover imagens pequenas (a imagem principal NUNCA é removida)
+    # ---------------------------------------------------------
     filtered = []
     for img in inline_images:
-        img_norm = normalize_url(img["url"])
-        if main_norm and img_norm == main_norm:
+        if img.get("is_main"):
             filtered.append(img)
             continue
         if _is_small_image(img["url"]):
@@ -660,17 +688,13 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
         filtered.append(img)
     inline_images = filtered
 
-    # --- Ordenar e limitar ---
+    # ---------------------------------------------------------
+    # Ordenar e limitar (imagem principal SEMPRE preservada)
+    # ---------------------------------------------------------
     inline_images.sort(key=lambda item: item["after_paragraph"])
     if max_images and len(inline_images) > max_images:
-        # Garante que a imagem principal nunca seja cortada pelo limite
-        main_entry = None
-        others = []
-        for img in inline_images:
-            if main_norm and normalize_url(img["url"]) == main_norm:
-                main_entry = img
-            else:
-                others.append(img)
+        main_entry = next((img for img in inline_images if img.get("is_main")), None)
+        others = [img for img in inline_images if not img.get("is_main")]
         kept = others[:max(0, max_images - (1 if main_entry else 0))]
         inline_images = ([main_entry] if main_entry else []) + kept
         inline_images.sort(key=lambda item: item["after_paragraph"])
@@ -750,7 +774,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.56"},
+                headers={"User-Agent": "RadioLuzGospel/12.57"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -836,7 +860,7 @@ def get_article(url):
         return None
 
     vv = videos(x)
-    # IMPORTANTE: passa a URL da imagem original para forçar posição 2
+    # A imagem original é passada explicitamente para forçar after_paragraph=2
     inline_imgs = extract_inline_images(
         x, box, article_url=url, main_image_url=img,
     )
@@ -846,7 +870,7 @@ def get_article(url):
     if vv:
         print(f"Vídeos válidos encontrados: {len(vv)}")
     if inline_imgs:
-        print(f"Imagens inline válidas (original no meio 2/3): {len(inline_imgs)}")
+        print(f"Imagens inline válidas (original fixada entre 2º/3º parágrafo): {len(inline_imgs)}")
 
     return {
         "url": normalize_url(url),
@@ -1667,14 +1691,22 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 
     inline_images = list(article.get("inline_images") or [])
 
-    # Fallback defensivo: se por algum motivo final_image não existe
-    # (não deve ocorrer no fluxo principal), evita duplicar a original.
+    # Fallback defensivo: se por algum motivo final_image não existe,
+    # evita duplicar a original na imagem de destaque.
     if not final_image and image_url:
-        main_norm = normalize_url(image_url)
+        main_key = _image_base_key(image_url)
         inline_images = [
             img for img in inline_images
-            if normalize_url(img.get("url", "")) != main_norm
+            if _image_base_key(img.get("url", "")) != main_key
         ]
+
+    # Garantia extra: a imagem principal SEMPRE em after_paragraph=2.
+    if image_url:
+        main_key = _image_base_key(image_url)
+        for img in inline_images:
+            if img.get("is_main") or _image_base_key(img.get("url", "")) == main_key:
+                img["after_paragraph"] = 2
+                img["is_main"] = True
 
     inline_images.sort(key=lambda item: item.get("after_paragraph", 9999))
 
@@ -2345,7 +2377,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.56 ATIVA: imagem original SEMPRE entre 2º e 3º parágrafos | miniaturas e imagens pequenas removidas do fim | imagem inicial em destaque permanece intacta | SEO automático | vídeos | Spotify | Telegram")
+print("VERSÃO 12.57 ATIVA: imagem original SEMPRE entre 2º e 3º parágrafo (uma única vez, mesmo com variantes redimensionadas) | destaque intacto no topo | miniaturas removidas | SEO | vídeos | Spotify | Telegram")
 
 _before_urls = set()
 if PROMO_ENABLED:
