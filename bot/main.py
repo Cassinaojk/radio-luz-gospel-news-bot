@@ -54,7 +54,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.54 (SEO Automático + Imagens Inline)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.55 (SEO Automático + Imagens Inline Centradas)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -319,7 +319,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.54)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.55)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -508,19 +508,17 @@ def _inline_image_is_valid(img_el, src):
 
 def extract_inline_images(x, box, article_url="", min_paragraph_len=35, max_images=None):
     """
-    Extrai imagens do corpo da matéria original, preservando a posição
-    relativa aos parágrafos válidos.
+    Extrai TODAS as imagens do corpo da matéria original (inclusive a imagem
+    principal, se ela aparecer no corpo), preservando a posição relativa aos
+    parágrafos válidos.
 
     Retorna lista de dicts: [{"url": "...", "after_paragraph": N}, ...]
-      - after_paragraph=0 => inserir antes do primeiro parágrafo (após a imagem principal)
+      - after_paragraph=0 => inserir antes do primeiro parágrafo (após a imagem principal da sequência)
       - after_paragraph=1 => inserir entre o 1º e o 2º parágrafo
       - after_paragraph=N => inserir após o N-ésimo parágrafo
     """
     if max_images is None:
         max_images = MAX_INLINE_IMAGES
-
-    main_img = image_original(x)
-    main_norm = normalize_url(main_img) if main_img else ""
 
     inline_images = []
     seen_urls = set()
@@ -539,8 +537,6 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35, max_imag
             return
         norm = normalize_url(resolved)
         if not norm or norm in seen_urls:
-            return
-        if main_norm and norm == main_norm:
             return
         if not _inline_image_is_valid(img_el, resolved):
             return
@@ -572,7 +568,7 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35, max_imag
     walk(box)
 
     # Se não conseguimos posicionar nada mas existem imagens no box,
-    # coleta fallback (todas como "final") — apenas se a caminhada não capturou nada.
+    # coleta fallback (todas como "final").
     if not inline_images:
         for img in box.find_all("img"):
             src = (
@@ -587,8 +583,6 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35, max_imag
                 continue
             norm = normalize_url(resolved)
             if not norm or norm in seen_urls:
-                continue
-            if main_norm and norm == main_norm:
                 continue
             if not _inline_image_is_valid(img, resolved):
                 continue
@@ -674,7 +668,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.54"},
+                headers={"User-Agent": "RadioLuzGospel/12.55"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -1512,6 +1506,7 @@ def build_seo_head_for_blogger(seo):
 # ============================================================
 
 def _render_inline_image_html(img_url, alt_text):
+    """Renderiza uma imagem inline CENTRALIZADA no corpo do post."""
     safe_img = (
         (img_url or "")
         .replace("&", "&amp;")
@@ -1532,7 +1527,8 @@ def _render_inline_image_html(img_url, alt_text):
         f'alt="{safe_alt}" '
         f'title="{safe_alt}" '
         'style="max-width:100%;height:auto;border-radius:12px;'
-        'box-shadow:0 4px 12px rgba(0,0,0,0.10);">'
+        'box-shadow:0 4px 12px rgba(0,0,0,0.10);'
+        'display:block;margin-left:auto;margin-right:auto;">'
         '</p>'
     )
 
@@ -1564,6 +1560,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     if seo_head:
         content.append(seo_head)
 
+    # --- imagem inicial em destaque (NÃO MEXER) ---
     content.extend([
         f'<p><strong>{generated["resumo"]}</strong></p>',
         (
@@ -1584,7 +1581,16 @@ def html(article, generated, final_image="", image_origin="", seo=None):
             article_paragraphs.append(paragraph)
 
     inline_images = list(article.get("inline_images") or [])
-    # ordenar por posição (o extract já ordena, mas garantimos)
+
+    # Evita duplicar a imagem-fonte quando ela é usada como destaque
+    # (fallback raro quando a sequência não encontrou imagem no repo).
+    if not final_image and image_url:
+        main_norm = normalize_url(image_url)
+        inline_images = [
+            img for img in inline_images
+            if normalize_url(img.get("url", "")) != main_norm
+        ]
+
     inline_images.sort(key=lambda item: item.get("after_paragraph", 9999))
 
     body_parts = []
@@ -2254,7 +2260,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.54 ATIVA: imagens inline da fonte (meio/fim) preservadas no corpo | imagem principal continua da sequência | SEO automático | vídeos | Spotify | Telegram")
+print("VERSÃO 12.55 ATIVA: imagens inline CENTRALIZADAS (incluindo a imagem principal do artigo original, se ela aparece no corpo) | imagem inicial em destaque permanece intacta | SEO automático | vídeos | Spotify | Telegram")
 
 _before_urls = set()
 if PROMO_ENABLED:
