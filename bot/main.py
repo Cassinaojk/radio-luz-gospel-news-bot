@@ -54,7 +54,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.53 (SEO Automático)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.54 (SEO Automático + Imagens Inline)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -107,6 +107,7 @@ IMAGE_FILES = [
 # Limites
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "1"))
 MAX_GEMINI_TEXT_CALLS_PER_RUN = int(os.getenv("MAX_GEMINI_TEXT_CALLS_PER_RUN", "6"))
+MAX_INLINE_IMAGES = int(os.getenv("MAX_INLINE_IMAGES", "8"))
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 80
@@ -298,7 +299,7 @@ SHARE_DOMAINS = (
     "t.me/share", "linkedin.com/share",
 )
 
-# ===== Whiltelist de plataformas de vídeo =====
+# ===== Whitelist de plataformas de vídeo =====
 VIDEO_HOSTS = (
     "youtube.com/embed/",
     "youtube.com/watch",
@@ -318,7 +319,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.53)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.54)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -459,6 +460,148 @@ def image_original(x):
     return ""
 
 
+def _resolve_img_src(src, base_url=""):
+    """Converte URLs relativas em absolutas, usando a URL do artigo como base."""
+    if not src:
+        return ""
+    src = src.strip()
+    if src.startswith("//"):
+        return "https:" + src
+    if src.startswith("/") and base_url:
+        try:
+            parsed = urlparse(base_url)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}{src}"
+        except Exception:
+            pass
+    if src.startswith(("http://", "https://")):
+        return src
+    return ""
+
+
+_INLINE_IMG_BAD_FRAGMENTS = (
+    "logo", "avatar", "icon", "favicon", "gravatar",
+    "spinner", "loading", "placeholder", "blank.gif",
+    "1x1", "pixel", "tracking", "advertisement",
+    "/ads/", "/ad/", "doubleclick", "googlesyndication",
+)
+
+
+def _inline_image_is_valid(img_el, src):
+    src_lower = src.lower()
+    if any(bad in src_lower for bad in _INLINE_IMG_BAD_FRAGMENTS):
+        return False
+    try:
+        w_attr = img_el.get("width") or ""
+        h_attr = img_el.get("height") or ""
+        w = int(re.sub(r"[^\d]", "", w_attr) or "0")
+        h = int(re.sub(r"[^\d]", "", h_attr) or "0")
+        if (w and w < 150) or (h and h < 150):
+            return False
+    except Exception:
+        pass
+    style = (img_el.get("style") or "").lower().replace(" ", "")
+    if "display:none" in style or "visibility:hidden" in style:
+        return False
+    return True
+
+
+def extract_inline_images(x, box, article_url="", min_paragraph_len=35, max_images=None):
+    """
+    Extrai imagens do corpo da matéria original, preservando a posição
+    relativa aos parágrafos válidos.
+
+    Retorna lista de dicts: [{"url": "...", "after_paragraph": N}, ...]
+      - after_paragraph=0 => inserir antes do primeiro parágrafo (após a imagem principal)
+      - after_paragraph=1 => inserir entre o 1º e o 2º parágrafo
+      - after_paragraph=N => inserir após o N-ésimo parágrafo
+    """
+    if max_images is None:
+        max_images = MAX_INLINE_IMAGES
+
+    main_img = image_original(x)
+    main_norm = normalize_url(main_img) if main_img else ""
+
+    inline_images = []
+    seen_urls = set()
+    para_count = 0
+
+    def process_img(img_el, position):
+        src = (
+            img_el.get("src")
+            or img_el.get("data-src")
+            or img_el.get("data-lazy-src")
+            or img_el.get("data-original")
+            or ""
+        )
+        resolved = _resolve_img_src(src, article_url)
+        if not resolved:
+            return
+        norm = normalize_url(resolved)
+        if not norm or norm in seen_urls:
+            return
+        if main_norm and norm == main_norm:
+            return
+        if not _inline_image_is_valid(img_el, resolved):
+            return
+        seen_urls.add(norm)
+        inline_images.append({
+            "url": resolved,
+            "after_paragraph": position,
+        })
+
+    def walk(node):
+        nonlocal para_count
+        if node is None or not hasattr(node, "children"):
+            return
+        for child in node.children:
+            if not getattr(child, "name", None):
+                continue
+            if child.name == "p":
+                # Imagens dentro do parágrafo: registrar antes de contá-lo.
+                for img in child.find_all("img"):
+                    process_img(img, para_count)
+                text = re.sub(r"\s+", " ", child.get_text(" ", strip=True))
+                if len(text) >= min_paragraph_len:
+                    para_count += 1
+            elif child.name == "img":
+                process_img(child, para_count)
+            else:
+                walk(child)
+
+    walk(box)
+
+    # Se não conseguimos posicionar nada mas existem imagens no box,
+    # coleta fallback (todas como "final") — apenas se a caminhada não capturou nada.
+    if not inline_images:
+        for img in box.find_all("img"):
+            src = (
+                img.get("src")
+                or img.get("data-src")
+                or img.get("data-lazy-src")
+                or img.get("data-original")
+                or ""
+            )
+            resolved = _resolve_img_src(src, article_url)
+            if not resolved:
+                continue
+            norm = normalize_url(resolved)
+            if not norm or norm in seen_urls:
+                continue
+            if main_norm and norm == main_norm:
+                continue
+            if not _inline_image_is_valid(img, resolved):
+                continue
+            seen_urls.add(norm)
+            inline_images.append({"url": resolved, "after_paragraph": 9999})
+
+    inline_images.sort(key=lambda item: item["after_paragraph"])
+    if max_images and len(inline_images) > max_images:
+        inline_images = inline_images[:max_images]
+
+    return inline_images
+
+
 def videos(x):
     BLOCK_HOSTS = (
         "doubleclick.net", "googlesyndication.com", "googleadservices.com",
@@ -531,7 +674,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.53"},
+                headers={"User-Agent": "RadioLuzGospel/12.54"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -617,10 +760,14 @@ def get_article(url):
         return None
 
     vv = videos(x)
+    inline_imgs = extract_inline_images(x, box, article_url=url)
+
     print("Notícia encontrada:", title)
     print("Texto extraído:", len(text), "caracteres")
     if vv:
         print(f"Vídeos válidos encontrados: {len(vv)}")
+    if inline_imgs:
+        print(f"Imagens inline encontradas: {len(inline_imgs)}")
 
     return {
         "url": normalize_url(url),
@@ -629,6 +776,7 @@ def get_article(url):
         "image": img,
         "text": text[:16000],
         "videos": vv,
+        "inline_images": inline_imgs,
     }
 
 
@@ -1363,6 +1511,32 @@ def build_seo_head_for_blogger(seo):
 # HTML DO POST
 # ============================================================
 
+def _render_inline_image_html(img_url, alt_text):
+    safe_img = (
+        (img_url or "")
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+    )
+    safe_alt = (
+        (alt_text or "")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+    if not safe_img:
+        return ""
+    return (
+        '<p style="text-align:center;margin:24px 0;">'
+        f'<img src="{safe_img}" '
+        f'alt="{safe_alt}" '
+        f'title="{safe_alt}" '
+        'style="max-width:100%;height:auto;border-radius:12px;'
+        'box-shadow:0 4px 12px rgba(0,0,0,0.10);">'
+        '</p>'
+    )
+
+
 def html(article, generated, final_image="", image_origin="", seo=None):
     seo = seo or {}
     titulo_exibicao = seo.get("titulo_base") or generated.get("titulo", "")
@@ -1402,15 +1576,47 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         ),
     ])
 
+    # --- corpo da matéria com imagens inline intercaladas ---
     article_paragraphs = []
     for paragraph in re.split(r"\n+", generated["materia"]):
         paragraph = paragraph.strip()
         if paragraph:
             article_paragraphs.append(paragraph)
 
-    for paragraph in article_paragraphs:
-        content.append(f"<p>{paragraph}</p>")
+    inline_images = list(article.get("inline_images") or [])
+    # ordenar por posição (o extract já ordena, mas garantimos)
+    inline_images.sort(key=lambda item: item.get("after_paragraph", 9999))
 
+    body_parts = []
+    para_idx = 0
+    total_paras = len(article_paragraphs)
+
+    for img_info in inline_images:
+        target = img_info.get("after_paragraph", 9999)
+        try:
+            target = int(target)
+        except Exception:
+            target = 9999
+        if target < 0:
+            target = 0
+        if target > total_paras:
+            target = total_paras
+
+        while para_idx < target:
+            body_parts.append(f"<p>{article_paragraphs[para_idx]}</p>")
+            para_idx += 1
+
+        rendered = _render_inline_image_html(img_info.get("url", ""), titulo_exibicao)
+        if rendered:
+            body_parts.append(rendered)
+
+    while para_idx < total_paras:
+        body_parts.append(f"<p>{article_paragraphs[para_idx]}</p>")
+        para_idx += 1
+
+    content.extend(body_parts)
+
+    # --- vídeos ---
     for video_url in article["videos"]:
         content.append(
             '<div style="margin:24px 0;padding:0;">'
@@ -2048,7 +2254,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.53 ATIVA: SEO automático (meta description, keywords, Open Graph, Twitter Card, Schema.org NewsArticle + Breadcrumb, labels otimizadas) | vídeos após o último parágrafo | Spotify em seguida | Telegram por último | sequência cíclica de 12 imagens")
+print("VERSÃO 12.54 ATIVA: imagens inline da fonte (meio/fim) preservadas no corpo | imagem principal continua da sequência | SEO automático | vídeos | Spotify | Telegram")
 
 _before_urls = set()
 if PROMO_ENABLED:
