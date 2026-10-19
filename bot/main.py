@@ -54,7 +54,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.57 (Original só entre 2º e 3º parágrafo, sem duplicatas)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.58 (Imagem original exclusivamente entre 2º e 3º parágrafo)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -88,7 +88,7 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
-# ===== Sequência de imagens (usadas em ciclo 1, 2, 3... 12, 1, 2, ...) =====
+# ===== Sequência de imagens =====
 IMAGE_FILES = [
     "bot/Imagens/radioluzgospel1.png",
     "bot/Imagens/radioluzgospel2.jpg",
@@ -320,7 +320,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.57)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.58)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -338,13 +338,7 @@ def normalize_url(u):
 
 
 def _image_base_key(url):
-    """Chave para identificar a MESMA imagem mesmo em tamanhos/URLs diferentes.
-
-    Exemplos que colapsam para a mesma chave:
-      https://example.com/foto-750x500.jpg   -> example.com/foto.jpg
-      https://example.com/foto.jpg?ver=2     -> example.com/foto.jpg
-      https://www.example.com/foto.jpg       -> example.com/foto.jpg
-    """
+    """Chave canônica para identificar a MESMA imagem em URLs diferentes."""
     if not url:
         return ""
     u = str(url).strip().split("#")[0].split("?")[0]
@@ -483,7 +477,7 @@ def image_original(x):
 
 
 def _resolve_img_src(src, base_url=""):
-    """Converte URLs relativas em absolutas, usando a URL do artigo como base."""
+    """Converte URLs relativas em absolutas."""
     if not src:
         return ""
     src = src.strip()
@@ -543,7 +537,6 @@ def _is_small_image(url, min_bytes=None):
 
     url_lower = url.lower()
 
-    # WordPress gera miniaturas com padrão NOME-WxH.ext
     m = re.search(r'-(\d{2,4})x(\d{2,4})\.(jpe?g|png|webp|gif)(\?|$)', url_lower)
     if m:
         try:
@@ -563,7 +556,7 @@ def _is_small_image(url, min_bytes=None):
     try:
         r = requests.head(
             url, timeout=6, allow_redirects=True,
-            headers={"User-Agent": "RadioLuzGospel/12.57"},
+            headers={"User-Agent": "RadioLuzGospel/12.58"},
         )
         if r.status_code == 200:
             size = 0
@@ -584,21 +577,18 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
                           max_images=None, main_image_url=""):
     """Extrai imagens do corpo da matéria original.
 
-    REGRAS CRÍTICAS:
-    - A imagem ORIGINAL (og:image) é SEMPRE posicionada entre o 2º e o 3º
-      parágrafo (after_paragraph=2), aparecendo UMA ÚNICA VEZ, mesmo que na
-      origem apareça em tamanhos diferentes (ex.: foto.jpg e foto-750x500.jpg).
-    - Miniaturas/ícones/imagens pequenas são descartadas.
-    - Imagens que não puderam ser posicionadas NÃO são jogadas ao fim.
+    A imagem principal (main_image_url) é IGNORADA durante a varredura
+    e adicionada MANUALMENTE em after_paragraph=2 no final.
+    Assim, ela nunca aparece no topo e fica sempre entre o 2º e o 3º parágrafo.
     """
     if max_images is None:
         max_images = MAX_INLINE_IMAGES
 
+    main_key = _image_base_key(main_image_url) if main_image_url else ""
+
     inline_images = []
     seen_urls = set()
     para_count = 0
-
-    main_key = _image_base_key(main_image_url) if main_image_url else ""
 
     def process_img(img_el, position):
         src = (
@@ -613,6 +603,9 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
             return
         norm = normalize_url(resolved)
         if not norm or norm in seen_urls:
+            return
+        # Ignora a imagem principal (será adicionada separadamente)
+        if main_key and _image_base_key(resolved) == main_key:
             return
         if not _inline_image_is_valid(img_el, resolved):
             return
@@ -642,41 +635,15 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
 
     walk(box)
 
-    # ---------------------------------------------------------
-    # IMAGEM ORIGINAL: sempre em after_paragraph=2, uma única vez
-    # ---------------------------------------------------------
-    if main_key:
-        main_kept = False
-        cleaned = []
-        for img in inline_images:
-            img_key = _image_base_key(img["url"])
-            if img_key == main_key:
-                if not main_kept:
-                    cleaned.append({
-                        "url": main_image_url,   # usa URL ORIGINAL (melhor qualidade)
-                        "after_paragraph": 2,
-                        "is_main": True,
-                    })
-                    main_kept = True
-                # variantes redimensionadas da mesma imagem são descartadas
-            else:
-                img["is_main"] = False
-                cleaned.append(img)
-        inline_images = cleaned
+    # Adiciona a imagem principal SEMPRE em after_paragraph=2
+    if main_image_url:
+        inline_images.append({
+            "url": main_image_url,
+            "after_paragraph": 2,
+            "is_main": True,
+        })
 
-        if not main_kept:
-            inline_images.append({
-                "url": main_image_url,
-                "after_paragraph": 2,
-                "is_main": True,
-            })
-
-        if _VERBOSE_LOG:
-            print(f"✓ Imagem original forçada para after_paragraph=2: {main_image_url[:90]}")
-
-    # ---------------------------------------------------------
-    # Remover imagens pequenas (a imagem principal NUNCA é removida)
-    # ---------------------------------------------------------
+    # Remove imagens pequenas (exceto a principal)
     filtered = []
     for img in inline_images:
         if img.get("is_main"):
@@ -688,9 +655,7 @@ def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
         filtered.append(img)
     inline_images = filtered
 
-    # ---------------------------------------------------------
-    # Ordenar e limitar (imagem principal SEMPRE preservada)
-    # ---------------------------------------------------------
+    # Ordena e limita, garantindo que a principal seja preservada
     inline_images.sort(key=lambda item: item["after_paragraph"])
     if max_images and len(inline_images) > max_images:
         main_entry = next((img for img in inline_images if img.get("is_main")), None)
@@ -774,7 +739,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.57"},
+                headers={"User-Agent": "RadioLuzGospel/12.58"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -860,7 +825,8 @@ def get_article(url):
         return None
 
     vv = videos(x)
-    # A imagem original é passada explicitamente para forçar after_paragraph=2
+    # A imagem original é passada explicitamente para ser ignorada na varredura
+    # e adicionada apenas em after_paragraph=2.
     inline_imgs = extract_inline_images(
         x, box, article_url=url, main_image_url=img,
     )
@@ -1691,18 +1657,9 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 
     inline_images = list(article.get("inline_images") or [])
 
-    # Fallback defensivo: se por algum motivo final_image não existe,
-    # evita duplicar a original na imagem de destaque.
-    if not final_image and image_url:
-        main_key = _image_base_key(image_url)
-        inline_images = [
-            img for img in inline_images
-            if _image_base_key(img.get("url", "")) != main_key
-        ]
-
-    # Garantia extra: a imagem principal SEMPRE em after_paragraph=2.
-    if image_url:
-        main_key = _image_base_key(image_url)
+    # Garantia final: a imagem principal SEMPRE em after_paragraph=2
+    if article.get("image"):
+        main_key = _image_base_key(article["image"])
         for img in inline_images:
             if img.get("is_main") or _image_base_key(img.get("url", "")) == main_key:
                 img["after_paragraph"] = 2
@@ -2377,7 +2334,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.57 ATIVA: imagem original SEMPRE entre 2º e 3º parágrafo (uma única vez, mesmo com variantes redimensionadas) | destaque intacto no topo | miniaturas removidas | SEO | vídeos | Spotify | Telegram")
+print("VERSÃO 12.58 ATIVA: imagem original EXCLUSIVAMENTE entre 2º e 3º parágrafo | destaque intacto no topo | miniaturas removidas | SEO | vídeos | Spotify | Telegram")
 
 _before_urls = set()
 if PROMO_ENABLED:
