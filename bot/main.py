@@ -54,7 +54,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.58 (Imagem original exclusivamente entre 2º e 3º parágrafo)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.59 (Apenas 1 imagem extra: og:image da origem, após o 2º parágrafo)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -88,7 +88,7 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
-# ===== Sequência de imagens =====
+# ===== Sequência de imagens de destaque (GitHub) =====
 IMAGE_FILES = [
     "bot/Imagens/radioluzgospel1.png",
     "bot/Imagens/radioluzgospel2.jpg",
@@ -107,8 +107,6 @@ IMAGE_FILES = [
 # Limites
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "1"))
 MAX_GEMINI_TEXT_CALLS_PER_RUN = int(os.getenv("MAX_GEMINI_TEXT_CALLS_PER_RUN", "6"))
-MAX_INLINE_IMAGES = int(os.getenv("MAX_INLINE_IMAGES", "8"))
-INLINE_IMAGE_MIN_BYTES = int(os.getenv("INLINE_IMAGE_MIN_BYTES", "12000"))
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 80
@@ -320,13 +318,12 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.58)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.59)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
 _ai_config_logged = False
 _image_url_cache = {}
-_image_size_cache = {}
 
 
 def normalize_url(u):
@@ -335,20 +332,6 @@ def normalize_url(u):
     u = u.strip().split("#")[0]
     u = u.rstrip("/")
     return u
-
-
-def _image_base_key(url):
-    """Chave canônica para identificar a MESMA imagem em URLs diferentes."""
-    if not url:
-        return ""
-    u = str(url).strip().split("#")[0].split("?")[0]
-    u = re.sub(r"^https?://", "", u, flags=re.I)
-    u = re.sub(r"^www\.", "", u, flags=re.I)
-    u = re.sub(
-        r"-\d{2,4}x\d{2,4}(\.(?:jpe?g|png|webp|gif|jpeg))$",
-        r"\1", u, flags=re.I,
-    )
-    return u.lower().rstrip("/")
 
 
 def bad_url(u):
@@ -448,223 +431,22 @@ def article_date(x):
 
 
 def image_original(x):
-    values = []
+    """Extrai APENAS a imagem de destaque (og:image) da postagem original."""
     for sel in (
         'meta[property="og:image"]',
+        'meta[property="og:image:secure_url"]',
         'meta[name="twitter:image"]',
+        'meta[name="twitter:image:src"]',
         'meta[itemprop="image"]',
     ):
         n = x.select_one(sel)
-        if n and n.get("content"):
-            values.append(n["content"])
-    for sel in (
-        "article img", ".entry-content img", ".post-content img",
-        ".td-post-content img", "main img",
-    ):
-        for n in x.select(sel)[:10]:
-            values.append(
-                n.get("src") or n.get("data-src") or n.get("data-lazy-src") or ""
-            )
-    for u in values:
-        u = u.strip()
-        if u.startswith("//"):
-            u = "https:" + u
-        if u.startswith(("http://", "https://")) and not any(
-            z in u.lower() for z in ("logo", "avatar", "icon", "favicon")
-        ):
-            return u
+        if n:
+            u = (n.get("content") or "").strip()
+            if u.startswith("//"):
+                u = "https:" + u
+            if u.startswith(("http://", "https://")):
+                return u
     return ""
-
-
-def _resolve_img_src(src, base_url=""):
-    """Converte URLs relativas em absolutas."""
-    if not src:
-        return ""
-    src = src.strip()
-    if src.startswith("//"):
-        return "https:" + src
-    if src.startswith("/") and base_url:
-        try:
-            parsed = urlparse(base_url)
-            if parsed.scheme and parsed.netloc:
-                return f"{parsed.scheme}://{parsed.netloc}{src}"
-        except Exception:
-            pass
-    if src.startswith(("http://", "https://")):
-        return src
-    return ""
-
-
-_INLINE_IMG_BAD_FRAGMENTS = (
-    "logo", "avatar", "icon", "favicon", "gravatar",
-    "spinner", "loading", "placeholder", "blank.gif",
-    "1x1", "pixel", "tracking", "advertisement",
-    "/ads/", "/ad/", "doubleclick", "googlesyndication",
-    "gravatar.com", "wordpress.com/i/", "wp.com/i/",
-    "emoji", "smiley", "emoticon", "sharedaddy",
-    "sharing", "social-share",
-)
-
-
-def _inline_image_is_valid(img_el, src):
-    src_lower = src.lower()
-    if any(bad in src_lower for bad in _INLINE_IMG_BAD_FRAGMENTS):
-        return False
-    try:
-        w_attr = img_el.get("width") or ""
-        h_attr = img_el.get("height") or ""
-        w = int(re.sub(r"[^\d]", "", w_attr) or "0")
-        h = int(re.sub(r"[^\d]", "", h_attr) or "0")
-        if (w and w < 200) or (h and h < 150):
-            return False
-    except Exception:
-        pass
-    style = (img_el.get("style") or "").lower().replace(" ", "")
-    if "display:none" in style or "visibility:hidden" in style:
-        return False
-    return True
-
-
-def _is_small_image(url, min_bytes=None):
-    """Retorna True se a imagem parece pequena (miniatura/ícone)."""
-    if not url:
-        return True
-    if min_bytes is None:
-        min_bytes = INLINE_IMAGE_MIN_BYTES
-
-    if url in _image_size_cache:
-        return _image_size_cache[url]
-
-    url_lower = url.lower()
-
-    m = re.search(r'-(\d{2,4})x(\d{2,4})\.(jpe?g|png|webp|gif)(\?|$)', url_lower)
-    if m:
-        try:
-            w = int(m.group(1))
-            h = int(m.group(2))
-            if max(w, h) < 500:
-                _image_size_cache[url] = True
-                return True
-        except Exception:
-            pass
-
-    if re.search(r'/(thumbs?|thumbnails?|small|mini|tiny|xs|sm)/', url_lower):
-        _image_size_cache[url] = True
-        return True
-
-    is_small = False
-    try:
-        r = requests.head(
-            url, timeout=6, allow_redirects=True,
-            headers={"User-Agent": "RadioLuzGospel/12.58"},
-        )
-        if r.status_code == 200:
-            size = 0
-            try:
-                size = int(r.headers.get("Content-Length", "0") or 0)
-            except Exception:
-                pass
-            if size and size < min_bytes:
-                is_small = True
-    except Exception:
-        pass
-
-    _image_size_cache[url] = is_small
-    return is_small
-
-
-def extract_inline_images(x, box, article_url="", min_paragraph_len=35,
-                          max_images=None, main_image_url=""):
-    """Extrai imagens do corpo da matéria original.
-
-    A imagem principal (main_image_url) é IGNORADA durante a varredura
-    e adicionada MANUALMENTE em after_paragraph=2 no final.
-    Assim, ela nunca aparece no topo e fica sempre entre o 2º e o 3º parágrafo.
-    """
-    if max_images is None:
-        max_images = MAX_INLINE_IMAGES
-
-    main_key = _image_base_key(main_image_url) if main_image_url else ""
-
-    inline_images = []
-    seen_urls = set()
-    para_count = 0
-
-    def process_img(img_el, position):
-        src = (
-            img_el.get("src")
-            or img_el.get("data-src")
-            or img_el.get("data-lazy-src")
-            or img_el.get("data-original")
-            or ""
-        )
-        resolved = _resolve_img_src(src, article_url)
-        if not resolved:
-            return
-        norm = normalize_url(resolved)
-        if not norm or norm in seen_urls:
-            return
-        # Ignora a imagem principal (será adicionada separadamente)
-        if main_key and _image_base_key(resolved) == main_key:
-            return
-        if not _inline_image_is_valid(img_el, resolved):
-            return
-        seen_urls.add(norm)
-        inline_images.append({
-            "url": resolved,
-            "after_paragraph": position,
-        })
-
-    def walk(node):
-        nonlocal para_count
-        if node is None or not hasattr(node, "children"):
-            return
-        for child in node.children:
-            if not getattr(child, "name", None):
-                continue
-            if child.name == "p":
-                for img in child.find_all("img"):
-                    process_img(img, para_count)
-                text = re.sub(r"\s+", " ", child.get_text(" ", strip=True))
-                if len(text) >= min_paragraph_len:
-                    para_count += 1
-            elif child.name == "img":
-                process_img(child, para_count)
-            else:
-                walk(child)
-
-    walk(box)
-
-    # Adiciona a imagem principal SEMPRE em after_paragraph=2
-    if main_image_url:
-        inline_images.append({
-            "url": main_image_url,
-            "after_paragraph": 2,
-            "is_main": True,
-        })
-
-    # Remove imagens pequenas (exceto a principal)
-    filtered = []
-    for img in inline_images:
-        if img.get("is_main"):
-            filtered.append(img)
-            continue
-        if _is_small_image(img["url"]):
-            print(f"⚠ Imagem inline pequena ignorada: {img['url'][:90]}")
-            continue
-        filtered.append(img)
-    inline_images = filtered
-
-    # Ordena e limita, garantindo que a principal seja preservada
-    inline_images.sort(key=lambda item: item["after_paragraph"])
-    if max_images and len(inline_images) > max_images:
-        main_entry = next((img for img in inline_images if img.get("is_main")), None)
-        others = [img for img in inline_images if not img.get("is_main")]
-        kept = others[:max(0, max_images - (1 if main_entry else 0))]
-        inline_images = ([main_entry] if main_entry else []) + kept
-        inline_images.sort(key=lambda item: item["after_paragraph"])
-
-    return inline_images
 
 
 def videos(x):
@@ -711,7 +493,7 @@ def videos(x):
 
 
 # ============================================================
-# SEQUÊNCIA DE IMAGENS
+# SEQUÊNCIA DE IMAGENS DE DESTAQUE (GitHub)
 # ============================================================
 
 def resolve_repo_image_url(relative_path):
@@ -739,7 +521,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.58"},
+                headers={"User-Agent": "RadioLuzGospel/12.59"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -825,18 +607,20 @@ def get_article(url):
         return None
 
     vv = videos(x)
-    # A imagem original é passada explicitamente para ser ignorada na varredura
-    # e adicionada apenas em after_paragraph=2.
-    inline_imgs = extract_inline_images(
-        x, box, article_url=url, main_image_url=img,
-    )
+
+    # ÚNICA imagem inline permitida: a og:image da origem, sempre em after_paragraph=2
+    inline_imgs = []
+    if img:
+        inline_imgs = [{"url": img, "after_paragraph": 2, "is_main": True}]
 
     print("Notícia encontrada:", title)
     print("Texto extraído:", len(text), "caracteres")
     if vv:
         print(f"Vídeos válidos encontrados: {len(vv)}")
     if inline_imgs:
-        print(f"Imagens inline válidas (original fixada entre 2º/3º parágrafo): {len(inline_imgs)}")
+        print(f"✓ Imagem de destaque da origem será inserida após o 2º parágrafo: {img[:90]}")
+    else:
+        print("⚠ Postagem original sem og:image — post seguirá sem imagem no corpo.")
 
     return {
         "url": normalize_url(url),
@@ -1635,7 +1419,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     if seo_head:
         content.append(seo_head)
 
-    # --- imagem inicial em destaque (sequência de 12 imagens — NÃO MEXER) ---
+    # --- imagem inicial em destaque (sequência de 12 imagens do GitHub — NÃO MEXER) ---
     content.extend([
         f'<p><strong>{generated["resumo"]}</strong></p>',
         (
@@ -1648,7 +1432,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         ),
     ])
 
-    # --- corpo da matéria com imagens inline intercaladas ---
+    # --- corpo da matéria com a ÚNICA imagem inline intercalada ---
     article_paragraphs = []
     for paragraph in re.split(r"\n+", generated["materia"]):
         paragraph = paragraph.strip()
@@ -1656,15 +1440,8 @@ def html(article, generated, final_image="", image_origin="", seo=None):
             article_paragraphs.append(paragraph)
 
     inline_images = list(article.get("inline_images") or [])
-
-    # Garantia final: a imagem principal SEMPRE em after_paragraph=2
-    if article.get("image"):
-        main_key = _image_base_key(article["image"])
-        for img in inline_images:
-            if img.get("is_main") or _image_base_key(img.get("url", "")) == main_key:
-                img["after_paragraph"] = 2
-                img["is_main"] = True
-
+    # Garantia: só pode haver UMA imagem inline (a og:image da origem)
+    inline_images = inline_images[:1]
     inline_images.sort(key=lambda item: item.get("after_paragraph", 9999))
 
     body_parts = []
@@ -2334,7 +2111,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.58 ATIVA: imagem original EXCLUSIVAMENTE entre 2º e 3º parágrafo | destaque intacto no topo | miniaturas removidas | SEO | vídeos | Spotify | Telegram")
+print("VERSÃO 12.59 ATIVA: apenas UMA imagem no corpo (og:image da origem, após o 2º parágrafo) | destaque do GitHub intacto no topo | SEO | vídeos | Spotify | Telegram")
 
 _before_urls = set()
 if PROMO_ENABLED:
