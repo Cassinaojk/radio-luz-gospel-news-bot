@@ -55,7 +55,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.60 (Anti-duplicidade por assunto)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.61 (Anti-duplicidade por entidades + título-fonte exato)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -319,7 +319,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.60)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.61)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -522,7 +522,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.60"},
+                headers={"User-Agent": "RadioLuzGospel/12.61"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -609,7 +609,6 @@ def get_article(url):
 
     vv = videos(x)
 
-    # ÚNICA imagem inline permitida: a og:image da origem, sempre em after_paragraph=2
     inline_imgs = []
     if img:
         inline_imgs = [{"url": img, "after_paragraph": 2, "is_main": True}]
@@ -698,18 +697,15 @@ def blogger():
 
 def existing(api, show_log=True):
     """
-    Varre posts do Blogger e retorna:
-      (blog_urls, source_urls, titles, subjects, source_titles, bot_posts_count)
-    - titles: títulos dos posts (usado no anti-duplicidade)
-    - subjects: assunto_principal gravado nos posts novos (marcador RADIO_LUZ_GOSPEL_SUBJECT)
-    - source_titles: título original da matéria-fonte (marcador RADIO_LUZ_GOSPEL_SOURCE_TITLE)
-    - bot_posts_count: quantos posts foram feitos pelo robô (para a sequência de imagens)
+    Varre posts do Blogger e retorna tupla:
+      (blog_urls, source_urls, titles, subjects, source_titles, entities_list, bot_posts_count)
     """
     blog_urls = set()
     source_urls = set()
     titles = []
     subjects = []
     source_titles = []
+    entities_list = []
     bot_posts_count = 0
     token = None
     try:
@@ -733,7 +729,6 @@ def existing(api, show_log=True):
 
                 content = post.get("content", "") or ""
 
-                # URLs de origem (para deduplicação por URL)
                 for match in re.findall(
                     r'href=["\'](https?://[^"\']+)["\']', content, flags=re.I
                 ):
@@ -744,7 +739,6 @@ def existing(api, show_log=True):
                 ):
                     source_urls.add(normalize_url(match))
 
-                # Assunto principal (marcador novo)
                 m = re.search(
                     r'RADIO_LUZ_GOSPEL_SUBJECT:\s*([^\n]+?)\s*-->',
                     content, flags=re.I,
@@ -752,7 +746,6 @@ def existing(api, show_log=True):
                 if m and m.group(1).strip():
                     subjects.append(m.group(1).strip())
 
-                # Título original da fonte (marcador novo)
                 m = re.search(
                     r'RADIO_LUZ_GOSPEL_SOURCE_TITLE:\s*([^\n]+?)\s*-->',
                     content, flags=re.I,
@@ -760,7 +753,18 @@ def existing(api, show_log=True):
                 if m and m.group(1).strip():
                     source_titles.append(m.group(1).strip())
 
-                # Conta posts do robô (para rotação de imagens)
+                m = re.search(
+                    r'RADIO_LUZ_GOSPEL_ENTITIES:\s*([^\n]+?)\s*-->',
+                    content, flags=re.I,
+                )
+                if m and m.group(1).strip():
+                    try:
+                        ents = json.loads(m.group(1).strip())
+                        if isinstance(ents, list):
+                            entities_list.append([str(x) for x in ents if str(x).strip()])
+                    except Exception:
+                        pass
+
                 if re.search(r"RADIO_LUZ_GOSPEL_SOURCE_URL:", content, flags=re.I):
                     bot_posts_count += 1
 
@@ -773,7 +777,7 @@ def existing(api, show_log=True):
         print("Posts existentes no Blogger:", len(blog_urls))
         print("Fontes já registradas:", len(source_urls))
         print(f"Posts do robô já publicados (contagem para sequência de imagens): {bot_posts_count}")
-    return blog_urls, source_urls, titles, subjects, source_titles, bot_posts_count
+    return blog_urls, source_urls, titles, subjects, source_titles, entities_list, bot_posts_count
 
 
 def update_existing_music_labels(api):
@@ -828,12 +832,10 @@ def update_existing_music_labels(api):
 
 
 # ============================================================
-# ANTI-DUPLICIDADE POR ASSUNTO / TÍTULO
+# ANTI-DUPLICIDADE POR ASSUNTO / TÍTULO / ENTIDADES
 # ============================================================
 
-# Palavras que NÃO ajudam a distinguir o assunto
 _COMPARE_STOPWORDS = {
-    # artigos, preposições, pronomes PT
     "a", "o", "as", "os", "de", "da", "do", "das", "dos", "e", "em",
     "um", "uma", "uns", "umas", "para", "por", "com", "no", "na",
     "nos", "nas", "que", "se", "ao", "aos", "sua", "seu", "suas",
@@ -841,23 +843,36 @@ _COMPARE_STOPWORDS = {
     "nao", "muito", "bem", "ainda", "tambem", "so", "esse", "essa",
     "este", "esta", "isso", "aquilo", "ele", "ela", "eles", "elas",
     "vai", "vem", "foi", "sao", "estao", "tem", "ter", "terao",
-    # verbos/auxiliares comuns em manchetes
-    "e", "eh", "ser", "sera", "novo", "nova", "novos", "novas",
+    "eh", "ser", "sera", "novo", "nova", "novos", "novas",
     "lanca", "lancou", "lancam", "lancar", "anuncia", "anunciou",
     "divulga", "divulgou", "revela", "revelou", "confirma", "confirmou",
     "veja", "confira", "saiba", "assista", "leia", "chega", "chegou",
-    # palavras genéricas do blog
     "radio", "luz", "gospel", "noticia", "noticias", "blog", "materia",
     "hoje", "agora", "ultima", "ultimas", "ultimo", "ultimos",
     "video", "videos", "foto", "fotos", "imagem", "imagens",
-    # inglês residual
     "the", "of", "to", "in", "and", "or", "on", "at", "for",
     "with", "from", "by",
 }
 
+# Entidades genéricas que NÃO devem contar como "mesma matéria"
+_GENERIC_ENTITIES = {
+    "brasil", "europa", "alemanha", "portugal", "estados", "unidos",
+    "africa", "america", "asia", "mundo", "pais", "paises", "cidade",
+    "estado", "governo", "igreja", "igrejas", "cristao", "cristaos",
+    "evangelico", "evangelicos", "evangelica", "evangelicas",
+    "pastor", "pastores", "lider", "lideres", "deus", "jesus", "cristo",
+    "biblia", "fe", "evangelho", "missao", "missoes",
+    "alanca", "alianca", "rede", "redes", "comunidade", "comunidades",
+    "congregacao", "congregacoes", "nacao", "nacoes", "povo", "povos",
+    "grupo", "grupos", "movimento", "projeto", "projetos", "evento",
+    "eventos", "encontro", "encontros", "conferencia", "conferencias",
+    "ano", "anos", "mes", "meses", "dia", "dias", "semana",
+    "noticia", "noticias", "reportagem", "materia",
+}
+
 
 def _compare_normalize(text):
-    """Normaliza texto para comparação: sem acento, lowercase, só palavras relevantes."""
+    """Normaliza texto: sem acento, lowercase, remove stopwords."""
     text = unicodedata.normalize("NFKD", str(text or ""))
     text = "".join(c for c in text if not unicodedata.combining(c)).lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
@@ -865,8 +880,15 @@ def _compare_normalize(text):
     return set(words)
 
 
+def _normalized_full_string(text):
+    """Normaliza texto preservando TODAS as palavras (só acentos/maiúsculas)."""
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _title_similarity(words_a, words_b):
-    """Jaccard similarity entre dois conjuntos de palavras."""
     if not words_a or not words_b:
         return 0.0
     inter = words_a & words_b
@@ -874,32 +896,169 @@ def _title_similarity(words_a, words_b):
     return len(inter) / len(union) if union else 0.0
 
 
-def is_duplicate_story(article, generated, existing_titles, existing_subjects, existing_source_titles):
+def _extract_entities(text):
     """
-    Retorna (True, motivo) se a matéria for duplicada de um post existente.
-    Camadas:
-      1) Título gerado pela IA × títulos de posts existentes (Jaccard >= 0.55)
-      2) Título da fonte × títulos de posts existentes e títulos-fonte (Jaccard >= 0.55)
-      3) Assunto principal × assuntos existentes (overlap >= 0.70) + título >= 0.35
+    Extrai entidades nomeadas (pessoas, organizações, lugares, eventos)
+    a partir de um texto curto (título). Estratégia:
+      - sequências de 2-4 palavras iniciadas por maiúscula
+      - siglas (2-6 letras maiúsculas)
+      - números de 3+ dígitos (ex: 40 mil, 2026)
+    Retorna lista de strings normalizadas (sem acento, minúsculas).
     """
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+
+    entities = []
+
+    # Divide em tokens preservando caixa original
+    tokens = re.findall(r"[A-Za-zÀ-ÿ0-9]+", raw)
+    if not tokens:
+        return []
+
+    def is_cap(tok):
+        return tok[:1].isupper() if tok else False
+
+    def is_upper_acronym(tok):
+        return 2 <= len(tok) <= 6 and tok.isupper() and tok.isalpha()
+
+    def is_year_or_number(tok):
+        return tok.isdigit() and (len(tok) >= 3)
+
+    n = len(tokens)
+    i = 0
+    while i < n:
+        tok = tokens[i]
+
+        # Sequência de palavras capitalizadas (2-4)
+        if is_cap(tok) and not is_upper_acronym(tok):
+            j = i
+            while j + 1 < n and is_cap(tokens[j + 1]) and not is_upper_acronym(tokens[j + 1]):
+                j += 1
+                if j - i + 1 >= 4:
+                    break
+            seq = tokens[i:j + 1]
+            if len(seq) >= 2:
+                entities.append(" ".join(seq).lower())
+            elif len(seq) == 1 and len(seq[0]) >= 5:
+                # Palavra capitalizada isolada longa (provável nome próprio)
+                entities.append(seq[0].lower())
+            i = j + 1
+            continue
+
+        # Sigla (ex: ONU, UE, CMI, BBC)
+        if is_upper_acronym(tok):
+            entities.append(tok.lower())
+            i += 1
+            continue
+
+        # Número/ano (2026, 2025...)
+        if is_year_or_number(tok) and tok.startswith(("19", "20")):
+            entities.append(tok)
+            i += 1
+            continue
+
+        i += 1
+
+    # Dedup preservando ordem
+    seen = set()
+    out = []
+    for e in entities:
+        e = re.sub(r"\s+", " ", e).strip()
+        if not e:
+            continue
+        if e in seen:
+            continue
+        seen.add(e)
+        out.append(e)
+    return out
+
+
+def _entity_words(entity):
+    """Normaliza uma entidade para comparação por palavra (tolera variações)."""
+    return set(_compare_normalize(entity))
+
+
+def _entities_overlap(entities_a, entities_b):
+    """
+    Retorna (n_comuns_fortes, n_comuns_fracos) comparando entidades.
+    - Forte: pelo menos uma palavra rara em comum + string muito similar
+    - Fraco: apenas uma palavra em comum, mas entidade inteira difere
+    Ignora entidades genéricas.
+    """
+    strong = 0
+    weak = 0
+    for ea in entities_a:
+        wa = _entity_words(ea)
+        if not wa:
+            continue
+        if wa.issubset(_GENERIC_ENTITIES):
+            continue
+        for eb in entities_b:
+            wb = _entity_words(eb)
+            if not wb:
+                continue
+            if wb.issubset(_GENERIC_ENTITIES):
+                continue
+            inter = wa & wb
+            if not inter:
+                continue
+            # Forte: coincidência de ≥ 50% das palavras OU substring literal
+            ratio = len(inter) / min(len(wa), len(wb))
+            if ratio >= 0.5:
+                strong += 1
+                break
+            else:
+                weak += 1
+                break
+    return strong, weak
+
+
+def is_duplicate_story(
+    article,
+    generated,
+    existing_titles,
+    existing_subjects,
+    existing_source_titles,
+    existing_entities=None,
+):
+    """
+    Retorna (True, motivo) se duplicada. Camadas, em ordem:
+      0) Título-fonte original IGUAL (string normalizada) → duplicata certa
+      1) Título gerado × títulos existentes (Jaccard >= 0.55)
+      2) Título-fonte × títulos/fontes existentes (Jaccard >= 0.55)
+      3) Assunto principal igual + título relacionado (>= 0.35)
+      4) Entidades fortes em comum: ≥ 2 → duplicata; 1 entidade forte
+         + similaridade título >= 0.25 → duplicata
+    """
+    existing_entities = existing_entities or []
+
     new_gen_title = (generated.get("titulo") or "").strip()
     new_src_title = (article.get("title") or "").strip()
     new_subject = (generated.get("assunto_principal") or "").strip()
 
+    # ----- Camada 0: título-fonte igual (mais forte) -----
+    new_src_norm = _normalized_full_string(new_src_title)
+    if new_src_norm and len(new_src_norm) >= 30:
+        for ex_src in existing_source_titles:
+            if _normalized_full_string(ex_src) == new_src_norm:
+                return True, f"mesma matéria-fonte (título original idêntico)"
+
     new_gen_words = _compare_normalize(new_gen_title)
     new_src_words = _compare_normalize(new_src_title)
 
-    # ----- Camada 1 e 2: similaridade de título -----
     best_score = 0.0
     best_match = ""
 
+    # ----- Camada 1 e 2: similaridade de título -----
     for existing_title in existing_titles:
         ex_words = _compare_normalize(existing_title)
         if not ex_words:
             continue
-        sim_gen = _title_similarity(new_gen_words, ex_words)
-        sim_src = _title_similarity(new_src_words, ex_words)
-        sim = max(sim_gen, sim_src)
+        sim = max(
+            _title_similarity(new_gen_words, ex_words),
+            _title_similarity(new_src_words, ex_words),
+        )
         if sim > best_score:
             best_score = sim
             best_match = existing_title
@@ -908,9 +1067,10 @@ def is_duplicate_story(article, generated, existing_titles, existing_subjects, e
         ex_words = _compare_normalize(existing_src)
         if not ex_words:
             continue
-        sim_gen = _title_similarity(new_gen_words, ex_words)
-        sim_src = _title_similarity(new_src_words, ex_words)
-        sim = max(sim_gen, sim_src)
+        sim = max(
+            _title_similarity(new_gen_words, ex_words),
+            _title_similarity(new_src_words, ex_words),
+        )
         if sim > best_score:
             best_score = sim
             best_match = existing_src
@@ -932,6 +1092,31 @@ def is_duplicate_story(article, generated, existing_titles, existing_subjects, e
                         f"mesmo assunto ({new_subject[:40]}) e título relacionado "
                         f"(score {best_score:.2f})"
                     )
+
+    # ----- Camada 4: entidades nomeadas -----
+    new_entities = _extract_entities(new_gen_title) + _extract_entities(new_src_title)
+    # Dedup
+    seen_e = set()
+    new_entities_dedup = []
+    for e in new_entities:
+        if e not in seen_e:
+            seen_e.add(e)
+            new_entities_dedup.append(e)
+
+    for ex_ents in existing_entities:
+        if not ex_ents:
+            continue
+        strong, weak = _entities_overlap(new_entities_dedup, ex_ents)
+        if strong >= 2:
+            return True, (
+                f"{strong} entidades fortes em comum com post existente "
+                f"(entidades novas: {', '.join(new_entities_dedup[:5])})"
+            )
+        if strong >= 1 and best_score >= 0.25:
+            return True, (
+                f"entidade em comum e títulos relacionados (score {best_score:.2f}, "
+                f"entidade: {new_entities_dedup[0] if new_entities_dedup else ''})"
+            )
 
     return False, ""
 
@@ -1490,7 +1675,6 @@ def build_seo_head_for_blogger(seo):
 # ============================================================
 
 def _render_inline_image_html(img_url, alt_text):
-    """Renderiza uma imagem inline CENTRALIZADA no corpo do post."""
     safe_img = (
         (img_url or "")
         .replace("&", "&amp;")
@@ -1544,7 +1728,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     if seo_head:
         content.append(seo_head)
 
-    # --- imagem inicial em destaque (sequência de 12 imagens do GitHub — NÃO MEXER) ---
     content.extend([
         f'<p><strong>{generated["resumo"]}</strong></p>',
         (
@@ -1557,7 +1740,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         ),
     ])
 
-    # --- corpo da matéria com a ÚNICA imagem inline intercalada ---
     article_paragraphs = []
     for paragraph in re.split(r"\n+", generated["materia"]):
         paragraph = paragraph.strip()
@@ -1565,7 +1747,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
             article_paragraphs.append(paragraph)
 
     inline_images = list(article.get("inline_images") or [])
-    # Garantia: só pode haver UMA imagem inline (a og:image da origem)
     inline_images = inline_images[:1]
     inline_images.sort(key=lambda item: item.get("after_paragraph", 9999))
 
@@ -1598,7 +1779,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 
     content.extend(body_parts)
 
-    # --- vídeos ---
     for video_url in article["videos"]:
         content.append(
             '<div style="margin:24px 0;padding:0;">'
@@ -1664,19 +1844,38 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 
     source_marker = f"<!-- RADIO_LUZ_GOSPEL_SOURCE_URL: {safe_source_url} -->"
 
-    # Marcador com o título original da fonte (para anti-duplicidade em próximas execuções)
     raw_source_title = (article.get("title") or "").strip()
     safe_source_title = raw_source_title.replace("--", "—").replace("\n", " ")[:300]
     source_title_marker = ""
     if safe_source_title:
         source_title_marker = f"\n<!-- RADIO_LUZ_GOSPEL_SOURCE_TITLE: {safe_source_title} -->"
 
-    # Marcador com o assunto principal (banda / cantor / pessoa) — anti-duplicidade
     raw_subject = (seo.get("assunto") or "").strip()
     safe_subject = raw_subject.replace("--", "—").replace("\n", " ")[:200]
     subject_marker = ""
     if safe_subject:
         subject_marker = f"\n<!-- RADIO_LUZ_GOSPEL_SUBJECT: {safe_subject} -->"
+
+    # NOVO: entidades extraídas para anti-duplicidade em próximas execuções
+    ents = []
+    try:
+        ents = _extract_entities(raw_source_title) + _extract_entities(seo.get("titulo_base") or "")
+        seen_e = set()
+        ents_dedup = []
+        for e in ents:
+            if e not in seen_e:
+                seen_e.add(e)
+                ents_dedup.append(e)
+        ents = ents_dedup[:40]
+    except Exception:
+        ents = []
+    entities_marker = ""
+    if ents:
+        try:
+            entities_json = json.dumps(ents, ensure_ascii=False).replace("--", "—")
+            entities_marker = f"\n<!-- RADIO_LUZ_GOSPEL_ENTITIES: {entities_json} -->"
+        except Exception:
+            entities_marker = ""
 
     image_marker = ""
     if image_origin:
@@ -1694,6 +1893,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         + "\n" + source_marker
         + source_title_marker
         + subject_marker
+        + entities_marker
         + image_marker
         + seo_marker
     )
@@ -1710,6 +1910,7 @@ def main():
         existing_titles,
         existing_subjects,
         existing_source_titles,
+        existing_entities,
         posts_count,
     ) = existing(api)
 
@@ -1739,13 +1940,13 @@ def main():
                     print(f"⚠ Pulada (pré-filtro): {article['title'][:70]} — {reason}")
                     continue
 
-                # Pré-verificação de duplicidade (barata, antes de chamar a IA)
                 pre_dup, pre_reason = is_duplicate_story(
                     article,
                     {"titulo": article.get("title", ""), "assunto_principal": ""},
                     existing_titles,
                     existing_subjects,
                     existing_source_titles,
+                    existing_entities,
                 )
                 if pre_dup:
                     pre_duplicates += 1
@@ -1759,7 +1960,7 @@ def main():
     print(f"Fontes encontradas: {source_summary}")
     print(f"Puladas: {prefiltered_out + pre_duplicates}")
     if pre_duplicates:
-        print(f"⚠ Duplicadas por assunto/título (pré-IA): {pre_duplicates}")
+        print(f"⚠ Duplicadas por assunto/título/entidades (pré-IA): {pre_duplicates}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
     print(f"Novas matérias musicais: {len(candidates)}")
@@ -1787,13 +1988,13 @@ def main():
                 break
             continue
 
-        # Verificação de duplicidade usando título gerado pela IA + assunto principal
         dup, dup_reason = is_duplicate_story(
             article,
             generated,
             existing_titles,
             existing_subjects,
             existing_source_titles,
+            existing_entities,
         )
         if dup:
             post_duplicates += 1
@@ -1842,8 +2043,7 @@ def main():
             published += 1
             old_source_urls.add(normalized)
 
-            # Registra título/assunto/título-fonte na memória local
-            # (para bloquear duplicatas que apareçam nas próximas matérias desta execução)
+            # Atualiza memória local (bloqueia duplicatas dentro da mesma execução)
             if seo.get("title"):
                 existing_titles.append(seo["title"])
             if seo.get("titulo_base"):
@@ -1852,6 +2052,20 @@ def main():
                 existing_source_titles.append(article["title"])
             if seo.get("assunto"):
                 existing_subjects.append(seo["assunto"])
+
+            # Registra entidades para próximas execuções
+            try:
+                new_ents = _extract_entities(article.get("title", "")) + _extract_entities(seo.get("titulo_base") or "")
+                seen_e = set()
+                new_ents_dedup = []
+                for e in new_ents:
+                    if e not in seen_e:
+                        seen_e.add(e)
+                        new_ents_dedup.append(e)
+                if new_ents_dedup:
+                    existing_entities.append(new_ents_dedup)
+            except Exception:
+                pass
 
             if response.get("url"):
                 old_blog_urls.add(normalize_url(response["url"]))
@@ -2311,7 +2525,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.60 ATIVA: anti-duplicidade por assunto | apenas UMA imagem no corpo (og:image da origem, após o 2º parágrafo) | destaque do GitHub intacto no topo | SEO | vídeos | Spotify | Telegram")
+print("VERSÃO 12.61 ATIVA: anti-duplicidade por entidades + título-fonte exato | uma imagem no corpo | SEO | vídeos | Spotify | Telegram")
 
 _before_urls = set()
 if PROMO_ENABLED:
