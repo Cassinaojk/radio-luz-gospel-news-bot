@@ -19,13 +19,13 @@ def print(*args, **kwargs):
         or message.startswith("Fontes encontradas:")
         or message.startswith("Novas matérias:")
         or message.startswith("Puladas:")
+        or message.startswith("Duplicadas")
         or message == "RESULTADO"
         or message.startswith("Publicações:")
         or message.startswith("Ignoradas:")
         or message.startswith("Falhas:")
         or message.startswith("✓ Publicada:")
         or message.startswith("✓ Imagem:")
-        or message.startswith("✓ Fallback:")
         or message.startswith("✓ SEO:")
         or message.startswith("✓ Labels:")
         or message.startswith("✓ Limpeza:")
@@ -33,14 +33,9 @@ def print(*args, **kwargs):
         or message.startswith("⚠ IA:")
         or message.startswith("⚠ Gemini:")
         or message.startswith("⚠ Imagem:")
-        or message.startswith("⚠ Fallback:")
         or message.startswith("⚠ Pulada:")
         or message.startswith("⚠ Duplicada:")
-        or message.startswith("⚠ Divulgação:")
-        or message.startswith("✓ Divulgação:")
-        or message.startswith("⚠ Instagram:")
-        or message.startswith("⚠ Não foi possível")
-        or message.startswith("Erro ao consultar Blogger:")
+        or message.startswith("⚠ Notícia antiga:")
         or message.startswith("Erro:")
     )
     if important:
@@ -50,13 +45,12 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from datetime import datetime, date, timezone, timedelta
-from zoneinfo import ZoneInfo
 from urllib.parse import urlparse, urljoin, quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.62 (Anti-duplicidade por conteúdo real do site)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 13.0 (Filtro de Hoje + Anti-Duplicidade API)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -90,7 +84,6 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
-# Limpeza opcional de duplicatas já publicadas
 CLEAN_DUPLICATES = os.getenv("CLEAN_DUPLICATES", "false").lower() in ("1", "true", "yes", "sim")
 
 # ===== Sequência de imagens de destaque (GitHub) =====
@@ -115,7 +108,10 @@ GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 80
 
-MAX_AGE_DAYS = 3650
+# ============================================================
+# CORREÇÃO 1: SÓ ACEITA NOTÍCIAS DE HOJE
+# ============================================================
+MAX_AGE_DAYS = 0 
 
 MIN_SOURCE_CHARS = 700
 MIN_SOURCE_PARAGRAPHS = 4
@@ -307,13 +303,12 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.62)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/13.0)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
 _ai_config_logged = False
 _image_url_cache = {}
-
 
 def normalize_url(u):
     if not u:
@@ -321,7 +316,6 @@ def normalize_url(u):
     u = u.strip().split("#")[0]
     u = u.rstrip("/")
     return u
-
 
 def bad_url(u):
     u = normalize_url(u).lower()
@@ -335,7 +329,6 @@ def bad_url(u):
     if re.search(r"\.(pdf|jpg|jpeg|png|gif|webp|svg|xml|zip)$", path):
         return True
     return False
-
 
 def soup(url, xml=False):
     try:
@@ -355,7 +348,6 @@ def soup(url, xml=False):
         print("Erro:", e)
         return None
 
-
 def date_parse(v):
     if not v:
         return None
@@ -371,7 +363,6 @@ def date_parse(v):
         except Exception:
             pass
     return None
-
 
 def article_date(x):
     selectors = (
@@ -413,7 +404,6 @@ def article_date(x):
                 return d
     return None
 
-
 def image_original(x):
     for sel in (
         'meta[property="og:image"]',
@@ -430,7 +420,6 @@ def image_original(x):
             if u.startswith(("http://", "https://")):
                 return u
     return ""
-
 
 def videos(x):
     BLOCK_HOSTS = (
@@ -467,7 +456,6 @@ def videos(x):
             out.append(u)
     return out[:3]
 
-
 # ============================================================
 # SEQUÊNCIA DE IMAGENS DE DESTAQUE (GitHub)
 # ============================================================
@@ -496,7 +484,7 @@ def resolve_repo_image_url(relative_path):
     for candidate in candidates:
         try:
             r = requests.get(candidate, stream=True, timeout=12,
-                             headers={"User-Agent": "RadioLuzGospel/12.62"})
+                             headers={"User-Agent": "RadioLuzGospel/13.0"})
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
@@ -511,7 +499,6 @@ def resolve_repo_image_url(relative_path):
     _image_url_cache[relative_path] = ""
     return ""
 
-
 def pick_next_image_url(posts_count):
     if not IMAGE_FILES:
         return "", ""
@@ -524,7 +511,6 @@ def pick_next_image_url(posts_count):
         if url:
             return url, rel
     return "", ""
-
 
 # ============================================================
 # ARTIGO
@@ -552,10 +538,10 @@ def get_article(url):
 
     d = article_date(x)
     if d:
-        print("Data encontrada:", d)
+        # FILTRO RÍGIDO DE DATA
         age = (datetime.now() - d).total_seconds() / 86400
         if age > MAX_AGE_DAYS:
-            print(f"Notícia muito antiga ({age:.1f} dias). Pulando.")
+            print(f"⚠ Notícia antiga (publicada em {d.strftime('%d/%m/%Y')}). Pulando.")
             return None
     else:
         print("Data não identificada. Aceitando para análise.")
@@ -588,10 +574,6 @@ def get_article(url):
     print("Texto extraído:", len(text), "caracteres")
     if vv:
         print(f"Vídeos válidos encontrados: {len(vv)}")
-    if inline_imgs:
-        print(f"✓ Imagem de destaque da origem será inserida após o 2º parágrafo: {img[:90]}")
-    else:
-        print("⚠ Postagem original sem og:image — post seguirá sem imagem no corpo.")
 
     return {
         "url": normalize_url(url),
@@ -602,7 +584,6 @@ def get_article(url):
         "videos": vv,
         "inline_images": inline_imgs,
     }
-
 
 def links(source):
     out = []
@@ -647,7 +628,6 @@ def links(source):
     print(f"Links encontrados em {source['nome']}: {len(out)}")
     return out[:MAX_LINKS_PER_SOURCE]
 
-
 def blogger():
     credentials = Credentials(
         None,
@@ -658,7 +638,6 @@ def blogger():
         scopes=["https://www.googleapis.com/auth/blogger"],
     )
     return build("blogger", "v3", credentials=credentials, cache_discovery=False)
-
 
 # ============================================================
 # EXTRAÇÃO DE CONTEÚDO E FINGERPRINT
@@ -681,28 +660,6 @@ _COMPARE_STOPWORDS = {
     "video", "videos", "foto", "fotos", "imagem", "imagens",
     "the", "of", "to", "in", "and", "or", "on", "at", "for",
     "with", "from", "by",
-    # Palavras muito comuns em notícias gospel (não distinguem conteúdo)
-    "apresenta", "apresentou", "apresentam", "apresentar",
-    "rede", "redes", "novo", "nova", "iniciativa", "iniciativas",
-    "congregacoes", "congregacao", "comunidades", "comunidade",
-    "igrejas", "igreja", "fe", "crista", "cristao", "cristaos",
-    "evangelica", "evangelico", "evangelicas", "evangelicos",
-    "durante", "encontro", "evento", "projeto", "programacao",
-    "lideres", "lider", "pastores", "pastor", "reverendo",
-    "recente", "recentemente", "divulgados", "divulgadas",
-    "objetivos", "objetivo", "proposta", "proposito",
-    "plano", "estrategia", "atuacao", "pratica",
-    "integracao", "integrar", "aproximar", "unir",
-    "publico", "jovem", "jovens", "adultos",
-    "nacoes", "nacao", "povos", "povo",
-    "diversidade", "etnica", "etnico",
-    "mensagem", "transmissao", "reconhecimento",
-    "ampliacao", "adesao", "filiacao", "participacao",
-    "especial", "atencao", "foco",
-    "varios", "varias", "diversos", "diversas", "diferentes",
-    "grande", "grandes", "pequeno", "pequenos",
-    "primeiro", "primeira", "segundo", "segunda", "terceiro", "terceira",
-    "dois", "duas", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez",
 }
 
 _GENERIC_ENTITIES = {
@@ -718,12 +675,7 @@ _GENERIC_ENTITIES = {
     "eventos", "encontro", "encontros", "conferencia", "conferencias",
     "ano", "anos", "mes", "meses", "dia", "dias", "semana",
     "noticia", "noticias", "reportagem", "materia",
-    # Genéricos geográficos/religiosos
-    "albânia", "albania", "golem", "ucrania", "ucraniano", "ucranianos",
-    "coreia", "sul", "china", "nigeria", "zimbabue", "ira", "hong", "kong",
-    "uniao", "europeia", "hope", "for", "europe",
 }
-
 
 def _compare_normalize(text):
     text = unicodedata.normalize("NFKD", str(text or ""))
@@ -732,13 +684,11 @@ def _compare_normalize(text):
     words = [w for w in text.split() if len(w) > 1 and w not in _COMPARE_STOPWORDS]
     return set(words)
 
-
 def _normalized_full_string(text):
     text = unicodedata.normalize("NFKD", str(text or ""))
     text = "".join(c for c in text if not unicodedata.combining(c)).lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
-
 
 def _title_similarity(words_a, words_b):
     if not words_a or not words_b:
@@ -747,9 +697,7 @@ def _title_similarity(words_a, words_b):
     union = words_a | words_b
     return len(inter) / len(union) if union else 0.0
 
-
 def _extract_entities(text):
-    """Extrai entidades nomeadas (sequências capitalizadas, siglas, anos)."""
     raw = str(text or "").strip()
     if not raw:
         return []
@@ -805,10 +753,8 @@ def _extract_entities(text):
         out.append(e)
     return out
 
-
 def _entity_words(entity):
     return set(_compare_normalize(entity))
-
 
 def _entities_overlap(entities_a, entities_b):
     strong = 0
@@ -833,14 +779,7 @@ def _entities_overlap(entities_a, entities_b):
                 break
     return strong, weak
 
-
 def _content_fingerprint(raw_text):
-    """
-    Extrai fingerprint de conteúdo de um texto:
-      - entidades nomeadas (pessoas, orgs, lugares, eventos)
-      - vocabulário raro (palavras não-genéricas com >= 5 caracteres)
-    Retorna dict {"entities": [...], "rare_words": set()}
-    """
     raw = str(raw_text or "")
     entities = _extract_entities(raw)
 
@@ -859,12 +798,7 @@ def _content_fingerprint(raw_text):
 
     return {"entities": entities, "rare_words": rare_words}
 
-
 def _content_overlap(fp_new, fp_old):
-    """
-    Compara dois fingerprints de conteúdo.
-    Retorna (n_entities_em_comum, taxa_vocabulario_em_comum).
-    """
     ent_new = set()
     for e in fp_new.get("entities", []):
         ew = _entity_words(e)
@@ -891,20 +825,11 @@ def _content_overlap(fp_new, fp_old):
 
     return n_entities, ratio
 
-
 # ============================================================
 # BUSCA DE POSTS EXISTENTES (com fingerprint de conteúdo)
 # ============================================================
 
 def existing(api, show_log=True):
-    """
-    Varre posts do Blogger e retorna:
-      (blog_urls, source_urls, titles, subjects, source_titles,
-       entities_list, content_fingerprints, posts_list, bot_posts_count)
-    - content_fingerprints: lista de dicts {"entities": [...], "rare_words": set}
-                            extraído do título + texto visível de cada post
-    - posts_list: lista de dicts resumidos (id, title, url, labels) para limpeza
-    """
     blog_urls = set()
     source_urls = set()
     titles = []
@@ -937,13 +862,11 @@ def existing(api, show_log=True):
                 if title:
                     titles.append(title)
 
-                # Texto visível do post (para fingerprint)
                 try:
                     visible_text = BeautifulSoup(content, "html.parser").get_text(" ", strip=True)
                 except Exception:
                     visible_text = ""
 
-                # Fingerprint de conteúdo (título + corpo visível)
                 full_text_for_fp = (title + " " + visible_text)[:12000]
                 fp = _content_fingerprint(full_text_for_fp)
                 content_fingerprints.append({
@@ -962,34 +885,20 @@ def existing(api, show_log=True):
                     "published": post.get("published", ""),
                 })
 
-                for match in re.findall(
-                    r'href=["\'](https?://[^"\']+)["\']', content, flags=re.I
-                ):
+                for match in re.findall(r'href=["\'](https?://[^"\']+)["\']', content, flags=re.I):
                     source_urls.add(normalize_url(match))
-                for match in re.findall(
-                    r'RADIO_LUZ_GOSPEL_SOURCE_URL:\s*(https?://[^\s]+?)\s*-->',
-                    content, flags=re.I,
-                ):
+                for match in re.findall(r'RADIO_LUZ_GOSPEL_SOURCE_URL:\s*(https?://[^\s]+?)\s*-->', content, flags=re.I):
                     source_urls.add(normalize_url(match))
 
-                m = re.search(
-                    r'RADIO_LUZ_GOSPEL_SUBJECT:\s*([^\n]+?)\s*-->',
-                    content, flags=re.I,
-                )
+                m = re.search(r'RADIO_LUZ_GOSPEL_SUBJECT:\s*([^\n]+?)\s*-->', content, flags=re.I)
                 if m and m.group(1).strip():
                     subjects.append(m.group(1).strip())
 
-                m = re.search(
-                    r'RADIO_LUZ_GOSPEL_SOURCE_TITLE:\s*([^\n]+?)\s*-->',
-                    content, flags=re.I,
-                )
+                m = re.search(r'RADIO_LUZ_GOSPEL_SOURCE_TITLE:\s*([^\n]+?)\s*-->', content, flags=re.I)
                 if m and m.group(1).strip():
                     source_titles.append(m.group(1).strip())
 
-                m = re.search(
-                    r'RADIO_LUZ_GOSPEL_ENTITIES:\s*([^\n]+?)\s*-->',
-                    content, flags=re.I,
-                )
+                m = re.search(r'RADIO_LUZ_GOSPEL_ENTITIES:\s*([^\n]+?)\s*-->', content, flags=re.I)
                 if m and m.group(1).strip():
                     try:
                         ents = json.loads(m.group(1).strip())
@@ -1009,62 +918,14 @@ def existing(api, show_log=True):
     if show_log:
         print("Posts existentes no Blogger:", len(blog_urls))
         print("Fontes já registradas:", len(source_urls))
-        print(f"Posts do robô já publicados (contagem para sequência de imagens): {bot_posts_count}")
+        print(f"Posts do robô já publicados: {bot_posts_count}")
     return (
         blog_urls, source_urls, titles, subjects, source_titles,
         entities_list, content_fingerprints, posts_list, bot_posts_count,
     )
 
-
-def update_existing_music_labels(api):
-    updated = 0
-    removed = 0
-    token = None
-    try:
-        while True:
-            kwargs = {"blogId": BLOGGER_BLOG_ID, "maxResults": 500, "fetchBodies": True}
-            if token:
-                kwargs["pageToken"] = token
-            data = api.posts().list(**kwargs).execute()
-            for post in data.get("items", []):
-                content = post.get("content", "") or ""
-                post_id = post.get("id")
-                if not post_id:
-                    continue
-                labels = list(post.get("labels", []) or [])
-                visible_text = BeautifulSoup(content, "html.parser").get_text(" ", strip=True)
-                should_music = is_music_related(
-                    article={"title": post.get("title", ""), "text": visible_text},
-                    raw_text=visible_text,
-                )
-                new_labels = labels[:]
-                if should_music and "Músicas" not in new_labels:
-                    new_labels.insert(1 if "Notícias" in new_labels else 0, "Músicas")
-                elif not should_music and "Músicas" in new_labels:
-                    new_labels = [x for x in new_labels if x != "Músicas"]
-                if new_labels != labels:
-                    api.posts().patch(
-                        blogId=BLOGGER_BLOG_ID,
-                        postId=post_id,
-                        body={"labels": new_labels},
-                    ).execute()
-                    if should_music:
-                        updated += 1
-                        print(f"✓ /musicas: classificado por conteúdo — {post.get('title','')}")
-                    else:
-                        removed += 1
-                        print(f"✓ /musicas: removido por não ser conteúdo musical — {post.get('title','')}")
-            token = data.get("nextPageToken")
-            if not token:
-                break
-    except Exception as e:
-        print("⚠ Não foi possível concluir a atualização dos posts existentes:", e)
-    print(f"Posts existentes adicionados a /musicas: {updated}")
-    print(f"Posts não musicais retirados de /musicas: {removed}")
-
-
 # ============================================================
-# ANTI-DUPLICIDADE (5 camadas + fingerprint de conteúdo)
+# ANTI-DUPLICIDADE
 # ============================================================
 
 def is_duplicate_story(
@@ -1076,17 +937,6 @@ def is_duplicate_story(
     existing_entities=None,
     content_fingerprints=None,
 ):
-    """
-    Retorna (True, motivo) se duplicada. Camadas:
-      0) Título-fonte original IDÊNTICO
-      1) Jaccard título gerado × existentes >= 0.55
-      2) Jaccard título-fonte × existentes/fontes >= 0.55
-      3) Assunto principal igual + título relacionado
-      4) Entidades nomeadas em comum: >= 2 fortes
-      5) NOVA: fingerprint de conteúdo
-         - >= 2 entidades raras em comum, OU
-         - >= 40% do vocabulário raro coincide
-    """
     existing_entities = existing_entities or []
     content_fingerprints = content_fingerprints or []
 
@@ -1147,7 +997,7 @@ def is_duplicate_story(
                 if overlap >= 0.70 and best_score >= 0.35:
                     return True, f"mesmo assunto ({new_subject[:40]}) e título relacionado (score {best_score:.2f})"
 
-    # ----- Camada 4: entidades dos marcadores -----
+    # ----- Camada 4 -----
     new_entities = _extract_entities(new_gen_title) + _extract_entities(new_src_title)
     seen_e = set()
     new_entities_dedup = []
@@ -1163,9 +1013,7 @@ def is_duplicate_story(
         if strong >= 2:
             return True, f"{strong} entidades fortes em comum com post existente"
 
-    # ----- Camada 5: fingerprint de conteúdo (NOVA) -----
-    # Fingerprint do artigo NOVO: usa o texto-fonte + títulos (fonte e gerado)
-    # + assunto principal, para maximizar chances de bater entidades/vocabulário.
+    # ----- Camada 5: fingerprint de conteúdo -----
     new_content_text = (
         (new_src_title + ". ") * 2
         + " ".join([new_gen_title, new_subject])
@@ -1191,25 +1039,54 @@ def is_duplicate_story(
 
     return False, ""
 
+# ============================================================
+# CORREÇÃO 2: VERIFICAÇÃO VIA API DO BLOGGER
+# ============================================================
+
+def check_blogger_for_duplicate(api, article_title):
+    """
+    Usa a API de busca do Blogger para ver se já existe um post
+    com as palavras-chave principais da notícia.
+    """
+    keywords = _compare_normalize(article_title)
+    if not keywords:
+        return False, ""
+    
+    search_terms = sorted(list(keywords), key=len, reverse=True)[:2]
+    query = " ".join(search_terms)
+    
+    try:
+        response = api.posts().search(
+            blogId=BLOGGER_BLOG_ID,
+            q=query,
+            fetchBodies=False,
+            maxResults=5
+        ).execute()
+        
+        for post in response.get("items", []):
+            post_title = post.get("title", "")
+            if _title_similarity(
+                _compare_normalize(article_title),
+                _compare_normalize(post_title)
+            ) >= 0.50:
+                return True, post_title
+            if any(term in _tech_norm(post_title) for term in search_terms):
+                return True, post_title
+                
+    except Exception as e:
+        print(f"⚠ Busca API: erro ao verificar duplicata: {e}")
+        
+    return False, ""
 
 # ============================================================
 # LIMPEZA DE DUPLICATAS JÁ PUBLICADAS
 # ============================================================
 
 def _clean_existing_duplicates(api, posts_list, content_fingerprints):
-    """
-    Detecta posts duplicados já publicados e os marca como RASCUNHO
-    (posts.update com isDraft=True). Não apaga definitivamente.
-
-    Estratégia: para cada post, compara seu fingerprint com os
-    fingerprints dos posts mais antigos (publicados antes dele).
-    Se sobreposição forte → o post mais recente vira rascunho.
-    """
     if not posts_list:
         print("✓ Limpeza: nenhum post para analisar.")
         return
 
-    # Ordena por published (mais antigo primeiro)
     def _pub_ts(p):
         pub = p.get("published", "") or ""
         try:
@@ -1218,7 +1095,6 @@ def _clean_existing_duplicates(api, posts_list, content_fingerprints):
             return 0.0
 
     ordered = sorted(posts_list, key=_pub_ts)
-
     fp_by_id = {fp.get("post_id"): fp for fp in content_fingerprints if fp}
 
     drafts_marked = 0
@@ -1228,7 +1104,6 @@ def _clean_existing_duplicates(api, posts_list, content_fingerprints):
         if not fp_new:
             continue
 
-        # Compara com todos os anteriores
         for j in range(i):
             prev_post = ordered[j]
             prev_id = prev_post.get("id")
@@ -1260,19 +1135,15 @@ def _clean_existing_duplicates(api, posts_list, content_fingerprints):
                         isDraft=True,
                     ).execute()
                     drafts_marked += 1
-                    print(
-                        f"✓ Limpeza: post marcado como rascunho — {post.get('title','')[:70]} "
-                        f"({reason}; duplicata de: {prev_post.get('title','')[:60]})"
-                    )
+                    print(f"✓ Limpeza: post marcado como rascunho — {post.get('title','')[:70]} ({reason})")
                 except Exception as exc:
                     print(f"⚠ Limpeza: falha ao marcar rascunho ({post.get('title','')[:50]}): {str(exc)[:150]}")
-                break  # já tratou este post
+                break
 
     if drafts_marked:
         print(f"✓ Limpeza: {drafts_marked} post(s) duplicado(s) movido(s) para rascunho.")
     else:
         print("✓ Limpeza: nenhuma duplicata detectada nos posts existentes.")
-
 
 # ============================================================
 # IA
@@ -1284,7 +1155,6 @@ def is_transient_gemini_error(exc):
         "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED",
         "500", "502", "504", "TIMEOUT",
     ))
-
 
 def gemini_request(client, model, prompt):
     last_error = None
@@ -1307,16 +1177,13 @@ def gemini_request(client, model, prompt):
             time.sleep(delay)
     raise last_error
 
-
 def norm_words(text):
     text = unicodedata.normalize("NFKD", text or "")
     text = "".join(c for c in text if not unicodedata.combining(c)).lower()
     return re.findall(r"[a-z0-9]+", text)
 
-
 def ngrams(words, n=8):
     return {" ".join(words[i:i+n]) for i in range(max(0, len(words)-n+1))}
-
 
 def longest_common_phrase(src_words, out_words, min_words=15):
     if not src_words or not out_words:
@@ -1335,7 +1202,6 @@ def longest_common_phrase(src_words, out_words, min_words=15):
                 return best
     return best
 
-
 def originality_check(source_text, generated_text):
     src = norm_words(source_text)
     out = norm_words(generated_text)
@@ -1351,7 +1217,6 @@ def originality_check(source_text, generated_text):
         return False, f"sobreposição 8-gram alta ({overlap:.3f})"
     return True, "OK"
 
-
 def _ai_extract_text(provider, response):
     choices = response.get("choices") or []
     if not choices:
@@ -1366,14 +1231,12 @@ def _ai_extract_text(provider, response):
         )
     return str(content).strip()
 
-
 def _provider_is_quota_error(status_code, body):
     text = str(body or "").upper()
     return status_code == 429 or any(x in text for x in (
         "RESOURCE_EXHAUSTED", "RATE LIMIT", "RATE_LIMIT", "QUOTA",
         "TOO MANY REQUESTS", "DAILY LIMIT", "LIMIT EXCEEDED",
     ))
-
 
 def _call_http_provider(provider, api_key, model, prompt):
     endpoint = {
@@ -1407,7 +1270,6 @@ def _call_http_provider(provider, api_key, model, prompt):
     except Exception as exc:
         raise RuntimeError(f"Resposta JSON inválida do {provider}: {exc}")
 
-
 def _build_ai_providers():
     providers = []
     if GEMINI_API_KEY:
@@ -1420,18 +1282,15 @@ def _build_ai_providers():
         providers.append(("mistral", MISTRAL_API_KEY, MISTRAL_MODEL))
     return providers
 
-
 def _provider_request(provider, api_key, model, prompt):
     if provider.startswith("gemini"):
         return gemini_request(genai.Client(api_key=api_key), model, prompt)
     return _call_http_provider(provider, api_key, model, prompt)
 
-
 def _provider_text(provider, response):
     if provider.startswith("gemini"):
         return (getattr(response, "text", None) or "").strip()
     return _ai_extract_text(provider, response)
-
 
 def _is_quota_exception(exc):
     msg = str(exc).upper()
@@ -1439,7 +1298,6 @@ def _is_quota_exception(exc):
         "429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE LIMIT", "RATE_LIMIT",
         "TOO MANY REQUESTS", "DAILY LIMIT", "LIMIT EXCEEDED",
     ))
-
 
 def gemini(article, client=None):
     global gemini_calls, gemini_quota_hit, _ai_config_logged
@@ -1504,7 +1362,6 @@ OUTRAS REGRAS:
   deixe string vazia "".
 - no campo "palavras_chave", informe uma lista com 5 a 10 palavras-chave
   de SEO relacionadas ao conteúdo (nomes, gêneros, temas, marcas).
-  Ex.: ["Kim", "música gospel", "lançamento", "single", "adoração"].
 - no campo "categoria_seo", informe a categoria principal do assunto:
   "Música Gospel", "Lançamento", "Show", "Entrevista", "Evento",
   "Notícia Gospel" ou "Testemunho".
@@ -1602,14 +1459,12 @@ construções das frases. Não repita sequências da fonte.
         print("⚠ IA: nenhum provedor disponível conseguiu gerar a matéria")
     return None
 
-
 # ============================================================
 # SEO AUTOMÁTICO
 # ============================================================
 
 def _strip_html(text):
     return re.sub(r"\s+", " ", BeautifulSoup(str(text or ""), "html.parser").get_text(" ", strip=True)).strip()
-
 
 def _truncate(text, limit):
     text = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -1620,15 +1475,6 @@ def _truncate(text, limit):
     if last_space > limit * 0.6:
         cut = cut[:last_space]
     return cut.rstrip(" ,;:-") + "..."
-
-
-def _slugify(text):
-    text = unicodedata.normalize("NFKD", str(text or ""))
-    text = "".join(c for c in text if not unicodedata.combining(c))
-    text = re.sub(r"[^\w\s-]", "", text.lower())
-    text = re.sub(r"[\s_-]+", "-", text).strip("-")
-    return text
-
 
 def build_seo_payload(article, generated, final_image="", image_origin=""):
     titulo_base = str(generated.get("titulo", "")).strip()
@@ -1796,10 +1642,8 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
         "categoria_seo": categoria_seo,
     }
 
-
 def build_seo_head_for_blogger(seo):
     return seo.get("html_head", "")
-
 
 # ============================================================
 # HTML DO POST
@@ -1824,7 +1668,6 @@ def _render_inline_image_html(img_url, alt_text):
         'display:block;margin-left:auto;margin-right:auto;">'
         '</p>'
     )
-
 
 def html(article, generated, final_image="", image_origin="", seo=None):
     seo = seo or {}
@@ -2002,9 +1845,8 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         + seo_marker
     )
 
-
 def main():
-    print("Fontes: Fuxico + News Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel + NT Gospel | /musicas por conteúdo")
+    print("Fontes: Fuxico + News Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel + NT Gospel")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
 
@@ -2020,12 +1862,9 @@ def main():
         posts_count,
     ) = existing(api)
 
-    # Limpeza opcional de duplicatas JÁ publicadas
     if CLEAN_DUPLICATES:
         print("✓ Limpeza: CLEAN_DUPLICATES=true — analisando posts existentes...")
         _clean_existing_duplicates(api, posts_list, content_fingerprints)
-
-    update_existing_music_labels(api)
 
     candidates = []
     candidate_urls = set()
@@ -2075,7 +1914,7 @@ def main():
         print(f"⚠ Duplicadas por conteúdo (pré-IA): {pre_duplicates}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
-    print(f"Novas matérias musicais: {len(candidates)}")
+    print(f"Novas matérias musicais de hoje: {len(candidates)}")
 
     published = 0
     failed = 0
@@ -2086,6 +1925,15 @@ def main():
         article = candidates.pop(0)
         normalized = normalize_url(article["url"])
         if normalized in old_source_urls:
+            ignored += 1
+            continue
+
+        # ============================================================
+        # CORREÇÃO 2: VERIFICAÇÃO VIA API ANTES DA IA
+        # ============================================================
+        is_dup_api, dup_title_api = check_blogger_for_duplicate(api, article["title"])
+        if is_dup_api:
+            print(f"⚠ Duplicada (API): «{article['title'][:60]}» já existe como «{dup_title_api[:60]}» — pulando.")
             ignored += 1
             continue
 
@@ -2130,9 +1978,6 @@ def main():
             image_origin=image_origin,
         )
         print(f"✓ SEO: título final = {seo['title'][:90]}")
-        print(f"✓ SEO: description = {seo['description'][:120]}...")
-        print(f"✓ SEO: keywords = {seo['keywords'][:160]}")
-        print(f"✓ Labels: {', '.join(seo['labels'])}")
 
         try:
             post_body = {
@@ -2177,7 +2022,6 @@ def main():
             except Exception:
                 pass
 
-            # Atualiza fingerprints locais (para bloquear duplicata dentro da mesma execução)
             try:
                 fp_new = _content_fingerprint(
                     (article.get("title", "") + " " + generated.get("titulo", "")
@@ -2226,416 +2070,6 @@ def main():
     if post_duplicates:
         print(f"⚠ Duplicadas detectadas após IA: {post_duplicates}")
 
-
-# ============================================================
-# DIVULGAÇÃO SOCIAL
-# ============================================================
-
-def promotion_url(post_url):
-    if not post_url:
-        return ""
-    try:
-        parts = urlsplit(post_url)
-        query = dict(parse_qsl(parts.query, keep_blank_values=True))
-        query.update({
-            "utm_source": PROMO_UTM_SOURCE,
-            "utm_medium": PROMO_UTM_MEDIUM,
-            "utm_campaign": PROMO_UTM_CAMPAIGN,
-        })
-        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
-    except Exception:
-        return post_url
-
-
-def social_image_url(post):
-    content = post.get("content", "") or ""
-    m = re.search(r"<img[^>]+src=[\"'](https?://[^\"']+)[\"']", content, flags=re.I)
-    if m:
-        return m.group(1)
-    return ""
-
-
-def facebook_promote(post, source_name_text):
-    if not FACEBOOK_ENABLED:
-        return False
-    if not FACEBOOK_PAGE_ID or not FACEBOOK_PAGE_ACCESS_TOKEN:
-        print("⚠ Divulgação: Facebook não configurado.")
-        return False
-    url = promotion_url(post.get("url", ""))
-    if not url:
-        return False
-    text = (
-        "📰 RÁDIO LUZ GOSPEL\n\n"
-        f"{post.get('title', '').strip()}\n\n"
-        "🎵 Confira a matéria completa no site:\n"
-        f"👉 {url}"
-    )
-    endpoint = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/feed"
-    try:
-        r = requests.post(endpoint, data={
-            "message": text[:60000], "link": url,
-            "access_token": FACEBOOK_PAGE_ACCESS_TOKEN,
-        }, timeout=TIMEOUT)
-        if r.ok:
-            print("✓ Divulgação: publicada no Facebook")
-            return True
-        print(f"⚠ Divulgação: Facebook HTTP {r.status_code}: {r.text[:300]}")
-    except Exception as e:
-        print("⚠ Divulgação: erro no Facebook:", e)
-    return False
-
-
-def _instagram_wrap_text(text, max_chars=31, max_lines=4):
-    words = re.sub(r"\s+", " ", str(text or "").strip()).split()
-    lines = []
-    current = ""
-    for word in words:
-        if len(word) > max_chars:
-            if current:
-                lines.append(current)
-                current = ""
-            chunks = [word[i:i + max_chars] for i in range(0, len(word), max_chars)]
-            lines.extend(chunks[:-1])
-            current = chunks[-1]
-            continue
-        candidate = f"{current} {word}".strip()
-        if current and len(candidate) > max_chars:
-            lines.append(current)
-            current = word
-        else:
-            current = candidate
-    if current:
-        lines.append(current)
-    return lines[:max_lines]
-
-
-def _instagram_fit_text(text, max_chars=31, max_lines=4):
-    for chars, size in (
-        (31, 32), (29, 30), (27, 28), (25, 26), (23, 24), (21, 22),
-    ):
-        lines = _instagram_wrap_text(text, max_chars=chars, max_lines=max_lines)
-        if len(lines) <= max_lines:
-            return lines, size
-    lines = _instagram_wrap_text(text, max_chars=21, max_lines=max_lines)
-    if len(lines) > max_lines:
-        lines = _instagram_wrap_text(text, max_chars=18, max_lines=max_lines)
-    return lines, 20
-
-
-def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, background_image_url=""):
-    title = re.sub(r"\s+", " ", str(title or "")).strip()
-    lines, font_size = _instagram_fit_text(title, max_chars=31, max_lines=4)
-
-    normalized_image_url = ""
-    if background_image_url:
-        normalized_image_url = (
-            "https://wsrv.nl/?"
-            f"url={quote(background_image_url, safe='')}"
-            "&w=1080&h=1350&fit=contain&cbg=111111"
-            "&output=jpg&q=90"
-        )
-
-    config = {
-        "type": "scatter",
-        "data": {
-            "datasets": [{
-                "data": [{"x": 0, "y": 0}],
-                "pointRadius": 0, "pointHitRadius": 0, "showLine": False,
-                "backgroundColor": "rgba(0,0,0,0)", "borderWidth": 0,
-            }],
-        },
-        "options": {
-            "responsive": False, "maintainAspectRatio": False, "animation": False,
-            "layout": {"padding": 0},
-            "plugins": {
-                "legend": {"display": False},
-                "tooltip": {"enabled": False},
-                "annotation": {
-                    "annotations": {
-                        "headline_box": {
-                            "type": "box", "xMin": -0.84, "xMax": 0.84,
-                            "yMin": -0.89, "yMax": -0.60,
-                            "backgroundColor": "rgba(245, 190, 0, 0.82)",
-                            "borderColor": "rgba(0, 105, 230, 0.95)",
-                            "borderWidth": 3, "borderRadius": 28,
-                            "drawTime": "afterDatasetsDraw", "z": 10,
-                        },
-                        "headline": {
-                            "type": "label", "xValue": 0, "yValue": -0.745,
-                            "content": lines, "color": "#FFFFFF",
-                            "backgroundColor": "rgba(0,0,0,0)", "borderWidth": 0,
-                            "font": {"size": font_size, "weight": "bold"},
-                            "position": "center", "textAlign": "center",
-                            "padding": {"top": 10, "bottom": 10, "left": 26, "right": 26},
-                            "drawTime": "afterDatasetsDraw", "z": 20,
-                            "callout": {"display": False},
-                        },
-                    }
-                },
-            },
-            "scales": {
-                "x": {"display": False, "min": -1, "max": 1},
-                "y": {"display": False, "min": -1, "max": 1},
-            },
-        },
-    }
-
-    if normalized_image_url:
-        config["options"]["plugins"]["backgroundImageUrl"] = normalized_image_url
-
-    try:
-        encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")))
-        return (
-            f"https://quickchart.io/chart?width={width}&height={height}"
-            f"&devicePixelRatio=1&version=4&format=png&c={encoded}"
-        )
-    except Exception as exc:
-        print(f"⚠ QuickChart: erro ao montar arte: {exc}")
-        return ""
-
-
-def instagram_art_url(post):
-    image_url = social_image_url(post)
-    if not image_url:
-        print("⚠ Instagram: matéria sem imagem; arte não pode ser criada.")
-        return ""
-    title = str(post.get("title", "")).strip()
-    chart_url = _quickchart_social_overlay(title, "", width=1080, height=1350, background_image_url=image_url)
-    if not chart_url:
-        return ""
-    for attempt in range(2):
-        try:
-            warm = requests.get(chart_url, stream=True, timeout=30)
-            warm_status = warm.status_code
-            warm_type = (warm.headers.get("Content-Type") or "").lower()
-            warm_error = warm.headers.get("X-quickchart-error", "")
-            warm.close()
-            if warm_status == 200 and warm_type.split(";", 1)[0].strip() == "image/png":
-                print("✓ Instagram: arte criada sem logo")
-                return chart_url
-            print(f"⚠ Instagram: arte do QuickChart inválida ({warm_status}, {warm_type}). {warm_error[:300]}")
-            return ""
-        except Exception as exc:
-            if attempt == 1:
-                print(f"⚠ Instagram: erro ao validar arte: {exc}")
-                return ""
-            time.sleep(1)
-    return ""
-
-
-def _instagram_check_last_post():
-    try:
-        r = requests.get(
-            f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}/media",
-            params={
-                "fields": "id,timestamp,media_type", "limit": 1,
-                "access_token": INSTAGRAM_ACCESS_TOKEN,
-            },
-            timeout=TIMEOUT,
-        )
-        if not r.ok:
-            return False
-        data = r.json().get("data", [])
-        if not data:
-            return False
-        last_ts = data[0].get("timestamp", "")
-        if not last_ts:
-            return False
-        last_dt = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - last_dt) < timedelta(seconds=90)
-    except Exception as exc:
-        print(f"⚠ Instagram: não foi possível checar último post: {exc}")
-        return False
-
-
-def instagram_promote(post, source_name_text):
-    if not INSTAGRAM_ENABLED:
-        return False
-    if not INSTAGRAM_USER_ID or not INSTAGRAM_ACCESS_TOKEN:
-        print("⚠ Divulgação: Instagram não configurado.")
-        return False
-    original_image_url = social_image_url(post)
-    image_url = instagram_art_url(post)
-    url = promotion_url(post.get("url", ""))
-    if not original_image_url or not image_url or not url:
-        print("⚠ Instagram: arte obrigatória não disponível; publicação cancelada para preservar a regra visual.")
-        return False
-    caption = (
-        "📰 RÁDIO LUZ GOSPEL\n\n"
-        f"{post.get('title', '').strip()}\n\n"
-        "🔗 Leia a matéria completa:\n"
-        f"{url}\n\n"
-        "#RadioLuzGospel #Gospel #NoticiasGospel #MusicaGospel"
-    )
-
-    base = f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/me"
-    try:
-        try:
-            check = requests.get(image_url, stream=True, timeout=25)
-            content_type = (check.headers.get("Content-Type") or "").lower()
-            status_code = check.status_code
-            quickchart_error = check.headers.get("X-quickchart-error", "")
-            check.close()
-            if status_code != 200 or content_type.split(";", 1)[0].strip() != "image/png":
-                print(f"⚠ Divulgação: arte automática inválida ({status_code}, {content_type}); esperado image/png. {quickchart_error[:400]}")
-                return False
-        except Exception as art_error:
-            print(f"⚠ Divulgação: não foi possível validar a arte automática: {art_error}")
-            return False
-
-        create = requests.post(
-            f"{base}/media",
-            data={"image_url": image_url, "caption": caption[:2200],
-                  "access_token": INSTAGRAM_ACCESS_TOKEN},
-            timeout=TIMEOUT,
-        )
-        if not create.ok:
-            print(f"⚠ Divulgação: Instagram criação HTTP {create.status_code}: {create.text[:300]}")
-            return False
-        creation_id = create.json().get("id")
-        if not creation_id:
-            print("⚠ Divulgação: Instagram não retornou o ID da publicação.")
-            return False
-
-        ready = False
-        for attempt in range(1, 7):
-            time.sleep(5)
-            status = requests.get(
-                f"{base.rsplit('/me', 1)[0]}/{creation_id}",
-                params={"fields": "status_code,status", "access_token": INSTAGRAM_ACCESS_TOKEN},
-                timeout=TIMEOUT,
-            )
-            if not status.ok:
-                print(f"⚠ Divulgação: Instagram status HTTP {status.status_code}: {status.text[:300]}")
-                return False
-            status_code = status.json().get("status_code", "")
-            if status_code == "FINISHED":
-                ready = True
-                break
-            if status_code in ("ERROR", "EXPIRED"):
-                print(f"⚠ Divulgação: container do Instagram ficou com status {status_code}.")
-                return False
-            print(f"   Instagram: aguardando processamento do container ({attempt}/6)...")
-
-        if not ready:
-            print("⚠ Divulgação: Instagram não deixou o container pronto a tempo.")
-            return False
-
-        publish = requests.post(
-            f"{base}/media_publish",
-            data={"creation_id": creation_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
-            timeout=TIMEOUT,
-        )
-        if publish.ok:
-            print("✓ Divulgação: publicada no Instagram com a arte obrigatória")
-            return True
-
-        if publish.status_code == 403:
-            print("⚠ Divulgação: Instagram retornou 403 (possível anti-spam); verificando se publicou...")
-            time.sleep(3)
-            if _instagram_check_last_post():
-                print("✓ Divulgação: Instagram publicou apesar do 403 (anti-spam) — tratado como sucesso")
-                return True
-            print("⚠ Divulgação: Instagram bloqueou de verdade (anti-spam). Aguarde algumas horas para tentar novamente.")
-
-        print(f"⚠ Divulgação: Instagram publicação HTTP {publish.status_code}: {publish.text[:300]}")
-    except Exception as e:
-        print("⚠ Divulgação: erro no Instagram:", e)
-    return False
-
-
-def telegram_promote(post, source_name_text):
-    if not PROMO_ENABLED:
-        print("Divulgação: desativada (PROMO_ENABLED=false)")
-        return False
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Divulgação: Telegram não configurado.")
-        return False
-    url = promotion_url(post.get("url", ""))
-    if not url:
-        return False
-    text = (
-        "📰 RÁDIO LUZ GOSPEL\n\n"
-        f"{post.get('title', '').strip()}\n\n"
-        "🎵 Confira a matéria completa:\n"
-        f"👉 {url}"
-    )
-    endpoint = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    try:
-        r = requests.post(endpoint, json={
-            "chat_id": TELEGRAM_CHAT_ID, "text": text[:3900],
-            "disable_web_page_preview": False,
-        }, timeout=TIMEOUT)
-        if r.status_code == 200:
-            print("✓ Divulgação: enviada ao Telegram para leitores inscritos")
-            return True
-        print(f"⚠ Divulgação: Telegram HTTP {r.status_code}")
-    except Exception as e:
-        print("⚠ Divulgação: erro no Telegram:", e)
-    return False
-
-
-def source_name(url):
-    host = urlparse(url or "").netloc.lower()
-    mapping = (
-        ("fuxicogospel.com.br", "Fuxico Gospel"),
-        ("newsgospel.com.br", "News Gospel"),
-        ("folhagospel.com", "Folha Gospel - Música"),
-        ("guiame.com.br", "Guiame - Música"),
-        ("gospelmais.com", "Gospel Mais"),
-        ("exibirgospel.com.br", "Exibir Gospel"),
-        ("igospel.org.br", "iGospel"),
-        ("ntgospel.com", "NT Gospel"),
-    )
-    for host_part, name in mapping:
-        if host_part in host:
-            return name
-    return host.replace("www.", "") or "Rádio Luz Gospel"
-
-
-def promote_new_posts(before_urls):
-    if not PROMO_ENABLED:
-        return
-    try:
-        api_after = blogger()
-        result = existing(api_after, show_log=False)
-        after_urls = result[0]
-        new_urls = list(after_urls - before_urls)
-        if not new_urls:
-            print("Divulgação: nenhuma publicação nova nesta execução.")
-            return
-        posts = api_after.posts().list(
-            blogId=BLOGGER_BLOG_ID, maxResults=500, fetchBodies=True,
-        ).execute().get("items", [])
-        post_url = new_urls[0]
-        post = next(
-            (p for p in posts if normalize_url(p.get("url", "")) == normalize_url(post_url)),
-            None,
-        )
-        if not post:
-            print("Divulgação: publicação recém-criada não localizada.")
-            return
-        content = post.get("content", "") or ""
-        m = re.search(r"RADIO_LUZ_GOSPEL_SOURCE_URL:\s*(https?://[^\s]+?)\s*-->", content, flags=re.I)
-        source_text = source_name(m.group(1)) if m else "Rádio Luz Gospel"
-        telegram_promote(post, source_text)
-        facebook_promote(post, source_text)
-        instagram_promote(post, source_text)
-    except Exception as exc:
-        print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
-
-
-print("VERSÃO 12.62 ATIVA: anti-duplicidade por conteúdo do site (fingerprint) | limpeza opcional | SEO | vídeos | Spotify | Telegram")
-
-_before_urls = set()
-if PROMO_ENABLED:
-    try:
-        result = existing(blogger(), show_log=False)
-        _before_urls = result[0]
-    except Exception as exc:
-        print("⚠ Divulgação: não foi possível capturar o estado anterior do Blogger:", exc)
+print("VERSÃO 13.0 ATIVA: Filtro de Hoje + Bloqueio via API + Fingerprint | SEO | Vídeos | Spotify | Telegram")
 
 main()
-
-if PROMO_ENABLED:
-    promote_new_posts(_before_urls)
