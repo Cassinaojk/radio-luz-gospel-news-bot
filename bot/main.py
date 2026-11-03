@@ -34,6 +34,7 @@ def print(*args, **kwargs):
         or message.startswith("⚠ Imagem:")
         or message.startswith("⚠ Fallback:")
         or message.startswith("⚠ Pulada:")
+        or message.startswith("⚠ Duplicada:")
         or message.startswith("⚠ Divulgação:")
         or message.startswith("✓ Divulgação:")
         or message.startswith("⚠ Instagram:")
@@ -49,12 +50,12 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from datetime import datetime, date, timezone, timedelta
 from zoneinfo import ZoneInfo
-from urllib.parse import urlparse, urljoin, quote
+from urllib.parse import urlparse, urljoin, quote, urlencode, urlsplit, urlunsplit, parse_qsl
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.59 (Apenas 1 imagem extra: og:image da origem, após o 2º parágrafo)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.60 (Anti-duplicidade por assunto)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -318,7 +319,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.59)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.60)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -521,7 +522,7 @@ def resolve_repo_image_url(relative_path):
         try:
             r = requests.get(
                 candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.59"},
+                headers={"User-Agent": "RadioLuzGospel/12.60"},
             )
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
@@ -696,8 +697,20 @@ def blogger():
 
 
 def existing(api, show_log=True):
+    """
+    Varre posts do Blogger e retorna:
+      (blog_urls, source_urls, titles, subjects, source_titles, bot_posts_count)
+    - titles: títulos dos posts (usado no anti-duplicidade)
+    - subjects: assunto_principal gravado nos posts novos (marcador RADIO_LUZ_GOSPEL_SUBJECT)
+    - source_titles: título original da matéria-fonte (marcador RADIO_LUZ_GOSPEL_SOURCE_TITLE)
+    - bot_posts_count: quantos posts foram feitos pelo robô (para a sequência de imagens)
+    """
     blog_urls = set()
     source_urls = set()
+    titles = []
+    subjects = []
+    source_titles = []
+    bot_posts_count = 0
     token = None
     try:
         while True:
@@ -713,7 +726,14 @@ def existing(api, show_log=True):
                 post_url = normalize_url(post.get("url", ""))
                 if post_url:
                     blog_urls.add(post_url)
+
+                title = (post.get("title") or "").strip()
+                if title:
+                    titles.append(title)
+
                 content = post.get("content", "") or ""
+
+                # URLs de origem (para deduplicação por URL)
                 for match in re.findall(
                     r'href=["\'](https?://[^"\']+)["\']', content, flags=re.I
                 ):
@@ -723,6 +743,27 @@ def existing(api, show_log=True):
                     content, flags=re.I,
                 ):
                     source_urls.add(normalize_url(match))
+
+                # Assunto principal (marcador novo)
+                m = re.search(
+                    r'RADIO_LUZ_GOSPEL_SUBJECT:\s*([^\n]+?)\s*-->',
+                    content, flags=re.I,
+                )
+                if m and m.group(1).strip():
+                    subjects.append(m.group(1).strip())
+
+                # Título original da fonte (marcador novo)
+                m = re.search(
+                    r'RADIO_LUZ_GOSPEL_SOURCE_TITLE:\s*([^\n]+?)\s*-->',
+                    content, flags=re.I,
+                )
+                if m and m.group(1).strip():
+                    source_titles.append(m.group(1).strip())
+
+                # Conta posts do robô (para rotação de imagens)
+                if re.search(r"RADIO_LUZ_GOSPEL_SOURCE_URL:", content, flags=re.I):
+                    bot_posts_count += 1
+
             token = data.get("nextPageToken")
             if not token:
                 break
@@ -731,33 +772,8 @@ def existing(api, show_log=True):
     if show_log:
         print("Posts existentes no Blogger:", len(blog_urls))
         print("Fontes já registradas:", len(source_urls))
-    return blog_urls, source_urls
-
-
-def count_bot_posts(api):
-    count = 0
-    token = None
-    try:
-        while True:
-            kwargs = {
-                "blogId": BLOGGER_BLOG_ID,
-                "maxResults": 500,
-                "fetchBodies": True,
-            }
-            if token:
-                kwargs["pageToken"] = token
-            data = api.posts().list(**kwargs).execute()
-            for post in data.get("items", []):
-                content = post.get("content", "") or ""
-                if re.search(r"RADIO_LUZ_GOSPEL_SOURCE_URL:", content, flags=re.I):
-                    count += 1
-            token = data.get("nextPageToken")
-            if not token:
-                break
-    except Exception as e:
-        print("Erro ao contar posts do robô:", e)
-    print(f"Posts do robô já publicados (contagem para sequência de imagens): {count}")
-    return count
+        print(f"Posts do robô já publicados (contagem para sequência de imagens): {bot_posts_count}")
+    return blog_urls, source_urls, titles, subjects, source_titles, bot_posts_count
 
 
 def update_existing_music_labels(api):
@@ -809,6 +825,115 @@ def update_existing_music_labels(api):
         print("⚠ Não foi possível concluir a atualização dos posts existentes:", e)
     print(f"Posts existentes adicionados a /musicas: {updated}")
     print(f"Posts não musicais retirados de /musicas: {removed}")
+
+
+# ============================================================
+# ANTI-DUPLICIDADE POR ASSUNTO / TÍTULO
+# ============================================================
+
+# Palavras que NÃO ajudam a distinguir o assunto
+_COMPARE_STOPWORDS = {
+    # artigos, preposições, pronomes PT
+    "a", "o", "as", "os", "de", "da", "do", "das", "dos", "e", "em",
+    "um", "uma", "uns", "umas", "para", "por", "com", "no", "na",
+    "nos", "nas", "que", "se", "ao", "aos", "sua", "seu", "suas",
+    "seus", "mais", "como", "sobre", "entre", "apos", "ate", "ja",
+    "nao", "muito", "bem", "ainda", "tambem", "so", "esse", "essa",
+    "este", "esta", "isso", "aquilo", "ele", "ela", "eles", "elas",
+    "vai", "vem", "foi", "sao", "estao", "tem", "ter", "terao",
+    # verbos/auxiliares comuns em manchetes
+    "e", "eh", "ser", "sera", "novo", "nova", "novos", "novas",
+    "lanca", "lancou", "lancam", "lancar", "anuncia", "anunciou",
+    "divulga", "divulgou", "revela", "revelou", "confirma", "confirmou",
+    "veja", "confira", "saiba", "assista", "leia", "chega", "chegou",
+    # palavras genéricas do blog
+    "radio", "luz", "gospel", "noticia", "noticias", "blog", "materia",
+    "hoje", "agora", "ultima", "ultimas", "ultimo", "ultimos",
+    "video", "videos", "foto", "fotos", "imagem", "imagens",
+    # inglês residual
+    "the", "of", "to", "in", "and", "or", "on", "at", "for",
+    "with", "from", "by",
+}
+
+
+def _compare_normalize(text):
+    """Normaliza texto para comparação: sem acento, lowercase, só palavras relevantes."""
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    words = [w for w in text.split() if len(w) > 1 and w not in _COMPARE_STOPWORDS]
+    return set(words)
+
+
+def _title_similarity(words_a, words_b):
+    """Jaccard similarity entre dois conjuntos de palavras."""
+    if not words_a or not words_b:
+        return 0.0
+    inter = words_a & words_b
+    union = words_a | words_b
+    return len(inter) / len(union) if union else 0.0
+
+
+def is_duplicate_story(article, generated, existing_titles, existing_subjects, existing_source_titles):
+    """
+    Retorna (True, motivo) se a matéria for duplicada de um post existente.
+    Camadas:
+      1) Título gerado pela IA × títulos de posts existentes (Jaccard >= 0.55)
+      2) Título da fonte × títulos de posts existentes e títulos-fonte (Jaccard >= 0.55)
+      3) Assunto principal × assuntos existentes (overlap >= 0.70) + título >= 0.35
+    """
+    new_gen_title = (generated.get("titulo") or "").strip()
+    new_src_title = (article.get("title") or "").strip()
+    new_subject = (generated.get("assunto_principal") or "").strip()
+
+    new_gen_words = _compare_normalize(new_gen_title)
+    new_src_words = _compare_normalize(new_src_title)
+
+    # ----- Camada 1 e 2: similaridade de título -----
+    best_score = 0.0
+    best_match = ""
+
+    for existing_title in existing_titles:
+        ex_words = _compare_normalize(existing_title)
+        if not ex_words:
+            continue
+        sim_gen = _title_similarity(new_gen_words, ex_words)
+        sim_src = _title_similarity(new_src_words, ex_words)
+        sim = max(sim_gen, sim_src)
+        if sim > best_score:
+            best_score = sim
+            best_match = existing_title
+
+    for existing_src in existing_source_titles:
+        ex_words = _compare_normalize(existing_src)
+        if not ex_words:
+            continue
+        sim_gen = _title_similarity(new_gen_words, ex_words)
+        sim_src = _title_similarity(new_src_words, ex_words)
+        sim = max(sim_gen, sim_src)
+        if sim > best_score:
+            best_score = sim
+            best_match = existing_src
+
+    if best_score >= 0.55:
+        return True, f"título muito similar a post existente ({best_score:.2f}): {best_match[:80]}"
+
+    # ----- Camada 3: assunto principal + título relacionado -----
+    if new_subject:
+        new_subj_words = _compare_normalize(new_subject)
+        if new_subj_words:
+            for ex_subj in existing_subjects:
+                ex_subj_words = _compare_normalize(ex_subj)
+                if not ex_subj_words:
+                    continue
+                overlap = len(new_subj_words & ex_subj_words) / max(1, len(new_subj_words))
+                if overlap >= 0.70 and best_score >= 0.35:
+                    return True, (
+                        f"mesmo assunto ({new_subject[:40]}) e título relacionado "
+                        f"(score {best_score:.2f})"
+                    )
+
+    return False, ""
 
 
 # ============================================================
@@ -1538,6 +1663,21 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     )
 
     source_marker = f"<!-- RADIO_LUZ_GOSPEL_SOURCE_URL: {safe_source_url} -->"
+
+    # Marcador com o título original da fonte (para anti-duplicidade em próximas execuções)
+    raw_source_title = (article.get("title") or "").strip()
+    safe_source_title = raw_source_title.replace("--", "—").replace("\n", " ")[:300]
+    source_title_marker = ""
+    if safe_source_title:
+        source_title_marker = f"\n<!-- RADIO_LUZ_GOSPEL_SOURCE_TITLE: {safe_source_title} -->"
+
+    # Marcador com o assunto principal (banda / cantor / pessoa) — anti-duplicidade
+    raw_subject = (seo.get("assunto") or "").strip()
+    safe_subject = raw_subject.replace("--", "—").replace("\n", " ")[:200]
+    subject_marker = ""
+    if safe_subject:
+        subject_marker = f"\n<!-- RADIO_LUZ_GOSPEL_SUBJECT: {safe_subject} -->"
+
     image_marker = ""
     if image_origin:
         image_marker = f"\n<!-- RADIO_LUZ_GOSPEL_IMAGE_SOURCE: {image_origin} -->"
@@ -1549,15 +1689,29 @@ def html(article, generated, final_image="", image_origin="", seo=None):
             f"\n<!-- RADIO_LUZ_GOSPEL_SEO_KEYWORDS: {seo.get('keywords','')[:300]} -->"
         )
 
-    return "\n".join(content) + "\n" + source_marker + image_marker + seo_marker
+    return (
+        "\n".join(content)
+        + "\n" + source_marker
+        + source_title_marker
+        + subject_marker
+        + image_marker
+        + seo_marker
+    )
 
 
 def main():
     print("Fontes: Fuxico + News Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel + NT Gospel | /musicas por conteúdo")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
-    old_blog_urls, old_source_urls = existing(api)
-    posts_count = count_bot_posts(api)
+
+    (
+        old_blog_urls,
+        old_source_urls,
+        existing_titles,
+        existing_subjects,
+        existing_source_titles,
+        posts_count,
+    ) = existing(api)
 
     update_existing_music_labels(api)
 
@@ -1565,6 +1719,7 @@ def main():
     candidate_urls = set()
     source_counts = {}
     prefiltered_out = 0
+    pre_duplicates = 0
 
     for source in SOURCES:
         source_links = links(source)
@@ -1583,12 +1738,28 @@ def main():
                     prefiltered_out += 1
                     print(f"⚠ Pulada (pré-filtro): {article['title'][:70]} — {reason}")
                     continue
+
+                # Pré-verificação de duplicidade (barata, antes de chamar a IA)
+                pre_dup, pre_reason = is_duplicate_story(
+                    article,
+                    {"titulo": article.get("title", ""), "assunto_principal": ""},
+                    existing_titles,
+                    existing_subjects,
+                    existing_source_titles,
+                )
+                if pre_dup:
+                    pre_duplicates += 1
+                    print(f"⚠ Duplicada (fonte): {article['title'][:70]} — {pre_reason}")
+                    continue
+
                 candidate_urls.add(normalized)
                 candidates.append(article)
 
     source_summary = " | ".join(f"{name}: {count}" for name, count in source_counts.items())
     print(f"Fontes encontradas: {source_summary}")
-    print(f"Puladas: {prefiltered_out}")
+    print(f"Puladas: {prefiltered_out + pre_duplicates}")
+    if pre_duplicates:
+        print(f"⚠ Duplicadas por assunto/título (pré-IA): {pre_duplicates}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
     print(f"Novas matérias musicais: {len(candidates)}")
@@ -1596,6 +1767,7 @@ def main():
     published = 0
     failed = 0
     ignored = 0
+    post_duplicates = 0
 
     while candidates and published < MAX_POSTS_PER_RUN:
         article = candidates.pop(0)
@@ -1613,6 +1785,20 @@ def main():
             ignored += 1
             if gemini_quota_hit:
                 break
+            continue
+
+        # Verificação de duplicidade usando título gerado pela IA + assunto principal
+        dup, dup_reason = is_duplicate_story(
+            article,
+            generated,
+            existing_titles,
+            existing_subjects,
+            existing_source_titles,
+        )
+        if dup:
+            post_duplicates += 1
+            ignored += 1
+            print(f"⚠ Duplicada (IA): {generated.get('titulo','')[:70]} — {dup_reason}")
             continue
 
         final_image, chosen_file = pick_next_image_url(posts_count + published)
@@ -1655,6 +1841,18 @@ def main():
 
             published += 1
             old_source_urls.add(normalized)
+
+            # Registra título/assunto/título-fonte na memória local
+            # (para bloquear duplicatas que apareçam nas próximas matérias desta execução)
+            if seo.get("title"):
+                existing_titles.append(seo["title"])
+            if seo.get("titulo_base"):
+                existing_titles.append(seo["titulo_base"])
+            if article.get("title"):
+                existing_source_titles.append(article["title"])
+            if seo.get("assunto"):
+                existing_subjects.append(seo["assunto"])
+
             if response.get("url"):
                 old_blog_urls.add(normalize_url(response["url"]))
                 try:
@@ -1684,12 +1882,13 @@ def main():
     print(f"Publicações: {published}")
     print(f"Ignoradas: {ignored}")
     print(f"Falhas: {failed}")
+    if post_duplicates:
+        print(f"⚠ Duplicadas detectadas após IA: {post_duplicates}")
 
 
 # ============================================================
 # DIVULGAÇÃO SOCIAL
 # ============================================================
-from urllib.parse import urlencode, urlsplit, urlunsplit, parse_qsl
 
 def promotion_url(post_url):
     if not post_url:
@@ -2083,7 +2282,8 @@ def promote_new_posts(before_urls):
         return
     try:
         api_after = blogger()
-        after_urls, _ = existing(api_after, show_log=False)
+        result = existing(api_after, show_log=False)
+        after_urls = result[0]
         new_urls = list(after_urls - before_urls)
         if not new_urls:
             print("Divulgação: nenhuma publicação nova nesta execução.")
@@ -2111,12 +2311,13 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.59 ATIVA: apenas UMA imagem no corpo (og:image da origem, após o 2º parágrafo) | destaque do GitHub intacto no topo | SEO | vídeos | Spotify | Telegram")
+print("VERSÃO 12.60 ATIVA: anti-duplicidade por assunto | apenas UMA imagem no corpo (og:image da origem, após o 2º parágrafo) | destaque do GitHub intacto no topo | SEO | vídeos | Spotify | Telegram")
 
 _before_urls = set()
 if PROMO_ENABLED:
     try:
-        _before_urls, _ = existing(blogger(), show_log=False)
+        result = existing(blogger(), show_log=False)
+        _before_urls = result[0]
     except Exception as exc:
         print("⚠ Divulgação: não foi possível capturar o estado anterior do Blogger:", exc)
 
