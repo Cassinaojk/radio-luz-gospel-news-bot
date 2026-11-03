@@ -28,6 +28,7 @@ def print(*args, **kwargs):
         or message.startswith("✓ Fallback:")
         or message.startswith("✓ SEO:")
         or message.startswith("✓ Labels:")
+        or message.startswith("✓ Limpeza:")
         or message.startswith("⚠ Blogger:")
         or message.startswith("⚠ IA:")
         or message.startswith("⚠ Gemini:")
@@ -55,7 +56,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.61 (Anti-duplicidade por entidades + título-fonte exato)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 12.62 (Anti-duplicidade por conteúdo real do site)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -89,6 +90,9 @@ INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
 
 META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
+# Limpeza opcional de duplicatas já publicadas
+CLEAN_DUPLICATES = os.getenv("CLEAN_DUPLICATES", "false").lower() in ("1", "true", "yes", "sim")
+
 # ===== Sequência de imagens de destaque (GitHub) =====
 IMAGE_FILES = [
     "bot/Imagens/radioluzgospel1.png",
@@ -105,7 +109,6 @@ IMAGE_FILES = [
     "bot/Imagens/radioluzgospel12.jpg",
 ]
 
-# Limites
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "1"))
 MAX_GEMINI_TEXT_CALLS_PER_RUN = int(os.getenv("MAX_GEMINI_TEXT_CALLS_PER_RUN", "6"))
 GEMINI_MAX_RETRIES = 3
@@ -182,10 +185,6 @@ def is_music_related(article=None, generated=None, raw_text=""):
     if strong_hits >= 2:
         return True
     return False
-
-def is_music_article(article):
-    return is_music_related(article=article)
-
 
 def quick_music_prefilter(article):
     title = _music_norm(article.get("title", ""))
@@ -299,27 +298,16 @@ SHARE_DOMAINS = (
     "t.me/share", "linkedin.com/share",
 )
 
-# ===== Whitelist de plataformas de vídeo =====
 VIDEO_HOSTS = (
-    "youtube.com/embed/",
-    "youtube.com/watch",
-    "youtube-nocookie.com/embed/",
-    "youtu.be/",
-    "player.vimeo.com",
-    "vimeo.com/video",
-    "facebook.com/plugins/video",
-    "web.facebook.com/plugins/video",
-    "instagram.com/p/",
-    "instagram.com/reel/",
-    "instagram.com/tv/",
-    "dailymotion.com/embed",
-    "twitch.tv/",
-    "streamable.com/e/",
-    "rumble.com/embed",
+    "youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/",
+    "youtu.be/", "player.vimeo.com", "vimeo.com/video",
+    "facebook.com/plugins/video", "web.facebook.com/plugins/video",
+    "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/",
+    "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed",
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.61)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/12.62)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -373,11 +361,8 @@ def date_parse(v):
         return None
     value = str(v).strip()
     formats = (
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M:%S.%f%z",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%d",
-        "%d/%m/%Y",
+        "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%d/%m/%Y",
     )
     for f in formats:
         try:
@@ -392,8 +377,7 @@ def article_date(x):
     selectors = (
         'meta[property="article:published_time"]',
         'meta[property="og:published_time"]',
-        'meta[name="date"]',
-        'meta[name="publish_date"]',
+        'meta[name="date"]', 'meta[name="publish_date"]',
         'meta[itemprop="datePublished"]',
     )
     for sel in selectors:
@@ -421,8 +405,7 @@ def article_date(x):
                     return d
         except Exception:
             pass
-    for sel in ("time.entry-date", "time.published", "time",
-                ".entry-date", ".posted-on"):
+    for sel in ("time.entry-date", "time.published", "time", ".entry-date", ".posted-on"):
         n = x.select_one(sel)
         if n:
             d = date_parse(n.get("datetime") or n.get_text(" ", strip=True))
@@ -432,7 +415,6 @@ def article_date(x):
 
 
 def image_original(x):
-    """Extrai APENAS a imagem de destaque (og:image) da postagem original."""
     for sel in (
         'meta[property="og:image"]',
         'meta[property="og:image:secure_url"]',
@@ -470,23 +452,16 @@ def videos(x):
         if not any(host in u_lower for host in VIDEO_HOSTS):
             continue
         style = (n.get("style") or "").lower().replace(" ", "")
-        if any(z in style for z in (
-            "display:none", "visibility:hidden", "opacity:0", "width:0", "height:0",
-        )):
+        if any(z in style for z in ("display:none", "visibility:hidden", "opacity:0", "width:0", "height:0")):
             continue
         try:
-            w_attr = (n.get("width") or "").strip()
-            h_attr = (n.get("height") or "").strip()
-            w = int(re.sub(r"[^\d]", "", w_attr) or "0")
-            h = int(re.sub(r"[^\d]", "", h_attr) or "0")
+            w = int(re.sub(r"[^\d]", "", (n.get("width") or "")) or "0")
+            h = int(re.sub(r"[^\d]", "", (n.get("height") or "")) or "0")
             if (w and w < 100) or (h and h < 100):
                 continue
         except Exception:
             pass
-        parent_hidden = n.find_parent(
-            style=re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
-        )
-        if parent_hidden:
+        if n.find_parent(style=re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)):
             continue
         if u not in out:
             out.append(u)
@@ -520,10 +495,8 @@ def resolve_repo_image_url(relative_path):
 
     for candidate in candidates:
         try:
-            r = requests.get(
-                candidate, stream=True, timeout=12,
-                headers={"User-Agent": "RadioLuzGospel/12.61"},
-            )
+            r = requests.get(candidate, stream=True, timeout=12,
+                             headers={"User-Agent": "RadioLuzGospel/12.62"})
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
@@ -544,7 +517,6 @@ def pick_next_image_url(posts_count):
         return "", ""
     total = len(IMAGE_FILES)
     start_idx = posts_count % total
-
     for offset in range(total):
         idx = (start_idx + offset) % total
         rel = IMAGE_FILES[idx]
@@ -608,7 +580,6 @@ def get_article(url):
         return None
 
     vv = videos(x)
-
     inline_imgs = []
     if img:
         inline_imgs = [{"url": img, "after_paragraph": 2, "is_main": True}]
@@ -656,11 +627,8 @@ def links(source):
             n = item.find("link")
             if not n:
                 continue
-            u = n.get("href") or n.get_text(strip=True) or ""
-            u = normalize_url(u)
-            if not u or bad_url(u):
-                continue
-            if not host_matches(u):
+            u = normalize_url(n.get("href") or n.get_text(strip=True) or "")
+            if not u or bad_url(u) or not host_matches(u):
                 continue
             if u not in seen:
                 seen.add(u)
@@ -669,11 +637,8 @@ def links(source):
     x = soup(source["url"])
     if x:
         for a in x.find_all("a", href=True):
-            u = urljoin(source["url"], a["href"])
-            u = normalize_url(u)
-            if bad_url(u):
-                continue
-            if not host_matches(u):
+            u = normalize_url(urljoin(source["url"], a["href"]))
+            if bad_url(u) or not host_matches(u):
                 continue
             if u not in seen:
                 seen.add(u)
@@ -695,10 +660,250 @@ def blogger():
     return build("blogger", "v3", credentials=credentials, cache_discovery=False)
 
 
+# ============================================================
+# EXTRAÇÃO DE CONTEÚDO E FINGERPRINT
+# ============================================================
+
+_COMPARE_STOPWORDS = {
+    "a", "o", "as", "os", "de", "da", "do", "das", "dos", "e", "em",
+    "um", "uma", "uns", "umas", "para", "por", "com", "no", "na",
+    "nos", "nas", "que", "se", "ao", "aos", "sua", "seu", "suas",
+    "seus", "mais", "como", "sobre", "entre", "apos", "ate", "ja",
+    "nao", "muito", "bem", "ainda", "tambem", "so", "esse", "essa",
+    "este", "esta", "isso", "aquilo", "ele", "ela", "eles", "elas",
+    "vai", "vem", "foi", "sao", "estao", "tem", "ter", "terao",
+    "eh", "ser", "sera", "novo", "nova", "novos", "novas",
+    "lanca", "lancou", "lancam", "lancar", "anuncia", "anunciou",
+    "divulga", "divulgou", "revela", "revelou", "confirma", "confirmou",
+    "veja", "confira", "saiba", "assista", "leia", "chega", "chegou",
+    "radio", "luz", "gospel", "noticia", "noticias", "blog", "materia",
+    "hoje", "agora", "ultima", "ultimas", "ultimo", "ultimos",
+    "video", "videos", "foto", "fotos", "imagem", "imagens",
+    "the", "of", "to", "in", "and", "or", "on", "at", "for",
+    "with", "from", "by",
+    # Palavras muito comuns em notícias gospel (não distinguem conteúdo)
+    "apresenta", "apresentou", "apresentam", "apresentar",
+    "rede", "redes", "novo", "nova", "iniciativa", "iniciativas",
+    "congregacoes", "congregacao", "comunidades", "comunidade",
+    "igrejas", "igreja", "fe", "crista", "cristao", "cristaos",
+    "evangelica", "evangelico", "evangelicas", "evangelicos",
+    "durante", "encontro", "evento", "projeto", "programacao",
+    "lideres", "lider", "pastores", "pastor", "reverendo",
+    "recente", "recentemente", "divulgados", "divulgadas",
+    "objetivos", "objetivo", "proposta", "proposito",
+    "plano", "estrategia", "atuacao", "pratica",
+    "integracao", "integrar", "aproximar", "unir",
+    "publico", "jovem", "jovens", "adultos",
+    "nacoes", "nacao", "povos", "povo",
+    "diversidade", "etnica", "etnico",
+    "mensagem", "transmissao", "reconhecimento",
+    "ampliacao", "adesao", "filiacao", "participacao",
+    "especial", "atencao", "foco",
+    "varios", "varias", "diversos", "diversas", "diferentes",
+    "grande", "grandes", "pequeno", "pequenos",
+    "primeiro", "primeira", "segundo", "segunda", "terceiro", "terceira",
+    "dois", "duas", "tres", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez",
+}
+
+_GENERIC_ENTITIES = {
+    "brasil", "europa", "alemanha", "portugal", "estados", "unidos",
+    "africa", "america", "asia", "mundo", "pais", "paises", "cidade",
+    "estado", "governo", "igreja", "igrejas", "cristao", "cristaos",
+    "evangelico", "evangelicos", "evangelica", "evangelicas",
+    "pastor", "pastores", "lider", "lideres", "deus", "jesus", "cristo",
+    "biblia", "fe", "evangelho", "missao", "missoes",
+    "alianca", "rede", "redes", "comunidade", "comunidades",
+    "congregacao", "congregacoes", "nacao", "nacoes", "povo", "povos",
+    "grupo", "grupos", "movimento", "projeto", "projetos", "evento",
+    "eventos", "encontro", "encontros", "conferencia", "conferencias",
+    "ano", "anos", "mes", "meses", "dia", "dias", "semana",
+    "noticia", "noticias", "reportagem", "materia",
+    # Genéricos geográficos/religiosos
+    "albânia", "albania", "golem", "ucrania", "ucraniano", "ucranianos",
+    "coreia", "sul", "china", "nigeria", "zimbabue", "ira", "hong", "kong",
+    "uniao", "europeia", "hope", "for", "europe",
+}
+
+
+def _compare_normalize(text):
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    words = [w for w in text.split() if len(w) > 1 and w not in _COMPARE_STOPWORDS]
+    return set(words)
+
+
+def _normalized_full_string(text):
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _title_similarity(words_a, words_b):
+    if not words_a or not words_b:
+        return 0.0
+    inter = words_a & words_b
+    union = words_a | words_b
+    return len(inter) / len(union) if union else 0.0
+
+
+def _extract_entities(text):
+    """Extrai entidades nomeadas (sequências capitalizadas, siglas, anos)."""
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+
+    entities = []
+    tokens = re.findall(r"[A-Za-zÀ-ÿ0-9]+", raw)
+    if not tokens:
+        return []
+
+    def is_cap(tok):
+        return tok[:1].isupper() if tok else False
+
+    def is_upper_acronym(tok):
+        return 2 <= len(tok) <= 6 and tok.isupper() and tok.isalpha()
+
+    def is_year_or_number(tok):
+        return tok.isdigit() and (len(tok) >= 3)
+
+    n = len(tokens)
+    i = 0
+    while i < n:
+        tok = tokens[i]
+        if is_cap(tok) and not is_upper_acronym(tok):
+            j = i
+            while j + 1 < n and is_cap(tokens[j + 1]) and not is_upper_acronym(tokens[j + 1]):
+                j += 1
+                if j - i + 1 >= 4:
+                    break
+            seq = tokens[i:j + 1]
+            if len(seq) >= 2:
+                entities.append(" ".join(seq).lower())
+            elif len(seq) == 1 and len(seq[0]) >= 5:
+                entities.append(seq[0].lower())
+            i = j + 1
+            continue
+        if is_upper_acronym(tok):
+            entities.append(tok.lower())
+            i += 1
+            continue
+        if is_year_or_number(tok) and tok.startswith(("19", "20")):
+            entities.append(tok)
+            i += 1
+            continue
+        i += 1
+
+    seen = set()
+    out = []
+    for e in entities:
+        e = re.sub(r"\s+", " ", e).strip()
+        if not e or e in seen:
+            continue
+        seen.add(e)
+        out.append(e)
+    return out
+
+
+def _entity_words(entity):
+    return set(_compare_normalize(entity))
+
+
+def _entities_overlap(entities_a, entities_b):
+    strong = 0
+    weak = 0
+    for ea in entities_a:
+        wa = _entity_words(ea)
+        if not wa or wa.issubset(_GENERIC_ENTITIES):
+            continue
+        for eb in entities_b:
+            wb = _entity_words(eb)
+            if not wb or wb.issubset(_GENERIC_ENTITIES):
+                continue
+            inter = wa & wb
+            if not inter:
+                continue
+            ratio = len(inter) / min(len(wa), len(wb))
+            if ratio >= 0.5:
+                strong += 1
+                break
+            else:
+                weak += 1
+                break
+    return strong, weak
+
+
+def _content_fingerprint(raw_text):
+    """
+    Extrai fingerprint de conteúdo de um texto:
+      - entidades nomeadas (pessoas, orgs, lugares, eventos)
+      - vocabulário raro (palavras não-genéricas com >= 5 caracteres)
+    Retorna dict {"entities": [...], "rare_words": set()}
+    """
+    raw = str(raw_text or "")
+    entities = _extract_entities(raw)
+
+    normalized = unicodedata.normalize("NFKD", raw)
+    normalized = "".join(c for c in normalized if not unicodedata.combining(c)).lower()
+    normalized = re.sub(r"[^a-z0-9\s]", " ", normalized)
+    tokens = normalized.split()
+
+    rare_words = set()
+    for w in tokens:
+        if len(w) < 5:
+            continue
+        if w in _COMPARE_STOPWORDS or w in _GENERIC_ENTITIES:
+            continue
+        rare_words.add(w)
+
+    return {"entities": entities, "rare_words": rare_words}
+
+
+def _content_overlap(fp_new, fp_old):
+    """
+    Compara dois fingerprints de conteúdo.
+    Retorna (n_entities_em_comum, taxa_vocabulario_em_comum).
+    """
+    ent_new = set()
+    for e in fp_new.get("entities", []):
+        ew = _entity_words(e)
+        if ew and not ew.issubset(_GENERIC_ENTITIES):
+            ent_new.add(e)
+    ent_old = set()
+    for e in fp_old.get("entities", []):
+        ew = _entity_words(e)
+        if ew and not ew.issubset(_GENERIC_ENTITIES):
+            ent_old.add(e)
+
+    n_entities = 0
+    if ent_new and ent_old:
+        strong, _weak = _entities_overlap(list(ent_new), list(ent_old))
+        n_entities = strong
+
+    rw_new = fp_new.get("rare_words") or set()
+    rw_old = fp_old.get("rare_words") or set()
+    if rw_new and rw_old:
+        inter = rw_new & rw_old
+        ratio = len(inter) / min(len(rw_new), len(rw_old))
+    else:
+        ratio = 0.0
+
+    return n_entities, ratio
+
+
+# ============================================================
+# BUSCA DE POSTS EXISTENTES (com fingerprint de conteúdo)
+# ============================================================
+
 def existing(api, show_log=True):
     """
-    Varre posts do Blogger e retorna tupla:
-      (blog_urls, source_urls, titles, subjects, source_titles, entities_list, bot_posts_count)
+    Varre posts do Blogger e retorna:
+      (blog_urls, source_urls, titles, subjects, source_titles,
+       entities_list, content_fingerprints, posts_list, bot_posts_count)
+    - content_fingerprints: lista de dicts {"entities": [...], "rare_words": set}
+                            extraído do título + texto visível de cada post
+    - posts_list: lista de dicts resumidos (id, title, url, labels) para limpeza
     """
     blog_urls = set()
     source_urls = set()
@@ -706,6 +911,8 @@ def existing(api, show_log=True):
     subjects = []
     source_titles = []
     entities_list = []
+    content_fingerprints = []
+    posts_list = []
     bot_posts_count = 0
     token = None
     try:
@@ -719,15 +926,41 @@ def existing(api, show_log=True):
                 kwargs["pageToken"] = token
             data = api.posts().list(**kwargs).execute()
             for post in data.get("items", []):
+                post_id = post.get("id", "")
                 post_url = normalize_url(post.get("url", ""))
+                title = (post.get("title") or "").strip()
+                content = post.get("content", "") or ""
+                labels = post.get("labels", []) or []
+
                 if post_url:
                     blog_urls.add(post_url)
-
-                title = (post.get("title") or "").strip()
                 if title:
                     titles.append(title)
 
-                content = post.get("content", "") or ""
+                # Texto visível do post (para fingerprint)
+                try:
+                    visible_text = BeautifulSoup(content, "html.parser").get_text(" ", strip=True)
+                except Exception:
+                    visible_text = ""
+
+                # Fingerprint de conteúdo (título + corpo visível)
+                full_text_for_fp = (title + " " + visible_text)[:12000]
+                fp = _content_fingerprint(full_text_for_fp)
+                content_fingerprints.append({
+                    "post_id": post_id,
+                    "post_url": post_url,
+                    "title": title,
+                    "entities": fp["entities"],
+                    "rare_words": fp["rare_words"],
+                })
+
+                posts_list.append({
+                    "id": post_id,
+                    "title": title,
+                    "url": post_url,
+                    "labels": labels,
+                    "published": post.get("published", ""),
+                })
 
                 for match in re.findall(
                     r'href=["\'](https?://[^"\']+)["\']', content, flags=re.I
@@ -777,7 +1010,10 @@ def existing(api, show_log=True):
         print("Posts existentes no Blogger:", len(blog_urls))
         print("Fontes já registradas:", len(source_urls))
         print(f"Posts do robô já publicados (contagem para sequência de imagens): {bot_posts_count}")
-    return blog_urls, source_urls, titles, subjects, source_titles, entities_list, bot_posts_count
+    return (
+        blog_urls, source_urls, titles, subjects, source_titles,
+        entities_list, content_fingerprints, posts_list, bot_posts_count,
+    )
 
 
 def update_existing_music_labels(api):
@@ -786,11 +1022,7 @@ def update_existing_music_labels(api):
     token = None
     try:
         while True:
-            kwargs = {
-                "blogId": BLOGGER_BLOG_ID,
-                "maxResults": 500,
-                "fetchBodies": True,
-            }
+            kwargs = {"blogId": BLOGGER_BLOG_ID, "maxResults": 500, "fetchBodies": True}
             if token:
                 kwargs["pageToken"] = token
             data = api.posts().list(**kwargs).execute()
@@ -832,187 +1064,8 @@ def update_existing_music_labels(api):
 
 
 # ============================================================
-# ANTI-DUPLICIDADE POR ASSUNTO / TÍTULO / ENTIDADES
+# ANTI-DUPLICIDADE (5 camadas + fingerprint de conteúdo)
 # ============================================================
-
-_COMPARE_STOPWORDS = {
-    "a", "o", "as", "os", "de", "da", "do", "das", "dos", "e", "em",
-    "um", "uma", "uns", "umas", "para", "por", "com", "no", "na",
-    "nos", "nas", "que", "se", "ao", "aos", "sua", "seu", "suas",
-    "seus", "mais", "como", "sobre", "entre", "apos", "ate", "ja",
-    "nao", "muito", "bem", "ainda", "tambem", "so", "esse", "essa",
-    "este", "esta", "isso", "aquilo", "ele", "ela", "eles", "elas",
-    "vai", "vem", "foi", "sao", "estao", "tem", "ter", "terao",
-    "eh", "ser", "sera", "novo", "nova", "novos", "novas",
-    "lanca", "lancou", "lancam", "lancar", "anuncia", "anunciou",
-    "divulga", "divulgou", "revela", "revelou", "confirma", "confirmou",
-    "veja", "confira", "saiba", "assista", "leia", "chega", "chegou",
-    "radio", "luz", "gospel", "noticia", "noticias", "blog", "materia",
-    "hoje", "agora", "ultima", "ultimas", "ultimo", "ultimos",
-    "video", "videos", "foto", "fotos", "imagem", "imagens",
-    "the", "of", "to", "in", "and", "or", "on", "at", "for",
-    "with", "from", "by",
-}
-
-# Entidades genéricas que NÃO devem contar como "mesma matéria"
-_GENERIC_ENTITIES = {
-    "brasil", "europa", "alemanha", "portugal", "estados", "unidos",
-    "africa", "america", "asia", "mundo", "pais", "paises", "cidade",
-    "estado", "governo", "igreja", "igrejas", "cristao", "cristaos",
-    "evangelico", "evangelicos", "evangelica", "evangelicas",
-    "pastor", "pastores", "lider", "lideres", "deus", "jesus", "cristo",
-    "biblia", "fe", "evangelho", "missao", "missoes",
-    "alanca", "alianca", "rede", "redes", "comunidade", "comunidades",
-    "congregacao", "congregacoes", "nacao", "nacoes", "povo", "povos",
-    "grupo", "grupos", "movimento", "projeto", "projetos", "evento",
-    "eventos", "encontro", "encontros", "conferencia", "conferencias",
-    "ano", "anos", "mes", "meses", "dia", "dias", "semana",
-    "noticia", "noticias", "reportagem", "materia",
-}
-
-
-def _compare_normalize(text):
-    """Normaliza texto: sem acento, lowercase, remove stopwords."""
-    text = unicodedata.normalize("NFKD", str(text or ""))
-    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    words = [w for w in text.split() if len(w) > 1 and w not in _COMPARE_STOPWORDS]
-    return set(words)
-
-
-def _normalized_full_string(text):
-    """Normaliza texto preservando TODAS as palavras (só acentos/maiúsculas)."""
-    text = unicodedata.normalize("NFKD", str(text or ""))
-    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _title_similarity(words_a, words_b):
-    if not words_a or not words_b:
-        return 0.0
-    inter = words_a & words_b
-    union = words_a | words_b
-    return len(inter) / len(union) if union else 0.0
-
-
-def _extract_entities(text):
-    """
-    Extrai entidades nomeadas (pessoas, organizações, lugares, eventos)
-    a partir de um texto curto (título). Estratégia:
-      - sequências de 2-4 palavras iniciadas por maiúscula
-      - siglas (2-6 letras maiúsculas)
-      - números de 3+ dígitos (ex: 40 mil, 2026)
-    Retorna lista de strings normalizadas (sem acento, minúsculas).
-    """
-    raw = str(text or "").strip()
-    if not raw:
-        return []
-
-    entities = []
-
-    # Divide em tokens preservando caixa original
-    tokens = re.findall(r"[A-Za-zÀ-ÿ0-9]+", raw)
-    if not tokens:
-        return []
-
-    def is_cap(tok):
-        return tok[:1].isupper() if tok else False
-
-    def is_upper_acronym(tok):
-        return 2 <= len(tok) <= 6 and tok.isupper() and tok.isalpha()
-
-    def is_year_or_number(tok):
-        return tok.isdigit() and (len(tok) >= 3)
-
-    n = len(tokens)
-    i = 0
-    while i < n:
-        tok = tokens[i]
-
-        # Sequência de palavras capitalizadas (2-4)
-        if is_cap(tok) and not is_upper_acronym(tok):
-            j = i
-            while j + 1 < n and is_cap(tokens[j + 1]) and not is_upper_acronym(tokens[j + 1]):
-                j += 1
-                if j - i + 1 >= 4:
-                    break
-            seq = tokens[i:j + 1]
-            if len(seq) >= 2:
-                entities.append(" ".join(seq).lower())
-            elif len(seq) == 1 and len(seq[0]) >= 5:
-                # Palavra capitalizada isolada longa (provável nome próprio)
-                entities.append(seq[0].lower())
-            i = j + 1
-            continue
-
-        # Sigla (ex: ONU, UE, CMI, BBC)
-        if is_upper_acronym(tok):
-            entities.append(tok.lower())
-            i += 1
-            continue
-
-        # Número/ano (2026, 2025...)
-        if is_year_or_number(tok) and tok.startswith(("19", "20")):
-            entities.append(tok)
-            i += 1
-            continue
-
-        i += 1
-
-    # Dedup preservando ordem
-    seen = set()
-    out = []
-    for e in entities:
-        e = re.sub(r"\s+", " ", e).strip()
-        if not e:
-            continue
-        if e in seen:
-            continue
-        seen.add(e)
-        out.append(e)
-    return out
-
-
-def _entity_words(entity):
-    """Normaliza uma entidade para comparação por palavra (tolera variações)."""
-    return set(_compare_normalize(entity))
-
-
-def _entities_overlap(entities_a, entities_b):
-    """
-    Retorna (n_comuns_fortes, n_comuns_fracos) comparando entidades.
-    - Forte: pelo menos uma palavra rara em comum + string muito similar
-    - Fraco: apenas uma palavra em comum, mas entidade inteira difere
-    Ignora entidades genéricas.
-    """
-    strong = 0
-    weak = 0
-    for ea in entities_a:
-        wa = _entity_words(ea)
-        if not wa:
-            continue
-        if wa.issubset(_GENERIC_ENTITIES):
-            continue
-        for eb in entities_b:
-            wb = _entity_words(eb)
-            if not wb:
-                continue
-            if wb.issubset(_GENERIC_ENTITIES):
-                continue
-            inter = wa & wb
-            if not inter:
-                continue
-            # Forte: coincidência de ≥ 50% das palavras OU substring literal
-            ratio = len(inter) / min(len(wa), len(wb))
-            if ratio >= 0.5:
-                strong += 1
-                break
-            else:
-                weak += 1
-                break
-    return strong, weak
-
 
 def is_duplicate_story(
     article,
@@ -1021,28 +1074,32 @@ def is_duplicate_story(
     existing_subjects,
     existing_source_titles,
     existing_entities=None,
+    content_fingerprints=None,
 ):
     """
-    Retorna (True, motivo) se duplicada. Camadas, em ordem:
-      0) Título-fonte original IGUAL (string normalizada) → duplicata certa
-      1) Título gerado × títulos existentes (Jaccard >= 0.55)
-      2) Título-fonte × títulos/fontes existentes (Jaccard >= 0.55)
-      3) Assunto principal igual + título relacionado (>= 0.35)
-      4) Entidades fortes em comum: ≥ 2 → duplicata; 1 entidade forte
-         + similaridade título >= 0.25 → duplicata
+    Retorna (True, motivo) se duplicada. Camadas:
+      0) Título-fonte original IDÊNTICO
+      1) Jaccard título gerado × existentes >= 0.55
+      2) Jaccard título-fonte × existentes/fontes >= 0.55
+      3) Assunto principal igual + título relacionado
+      4) Entidades nomeadas em comum: >= 2 fortes
+      5) NOVA: fingerprint de conteúdo
+         - >= 2 entidades raras em comum, OU
+         - >= 40% do vocabulário raro coincide
     """
     existing_entities = existing_entities or []
+    content_fingerprints = content_fingerprints or []
 
     new_gen_title = (generated.get("titulo") or "").strip()
     new_src_title = (article.get("title") or "").strip()
     new_subject = (generated.get("assunto_principal") or "").strip()
 
-    # ----- Camada 0: título-fonte igual (mais forte) -----
+    # ----- Camada 0 -----
     new_src_norm = _normalized_full_string(new_src_title)
     if new_src_norm and len(new_src_norm) >= 30:
         for ex_src in existing_source_titles:
             if _normalized_full_string(ex_src) == new_src_norm:
-                return True, f"mesma matéria-fonte (título original idêntico)"
+                return True, "mesma matéria-fonte (título original idêntico)"
 
     new_gen_words = _compare_normalize(new_gen_title)
     new_src_words = _compare_normalize(new_src_title)
@@ -1050,7 +1107,7 @@ def is_duplicate_story(
     best_score = 0.0
     best_match = ""
 
-    # ----- Camada 1 e 2: similaridade de título -----
+    # ----- Camadas 1 e 2 -----
     for existing_title in existing_titles:
         ex_words = _compare_normalize(existing_title)
         if not ex_words:
@@ -1078,7 +1135,7 @@ def is_duplicate_story(
     if best_score >= 0.55:
         return True, f"título muito similar a post existente ({best_score:.2f}): {best_match[:80]}"
 
-    # ----- Camada 3: assunto principal + título relacionado -----
+    # ----- Camada 3 -----
     if new_subject:
         new_subj_words = _compare_normalize(new_subject)
         if new_subj_words:
@@ -1088,14 +1145,10 @@ def is_duplicate_story(
                     continue
                 overlap = len(new_subj_words & ex_subj_words) / max(1, len(new_subj_words))
                 if overlap >= 0.70 and best_score >= 0.35:
-                    return True, (
-                        f"mesmo assunto ({new_subject[:40]}) e título relacionado "
-                        f"(score {best_score:.2f})"
-                    )
+                    return True, f"mesmo assunto ({new_subject[:40]}) e título relacionado (score {best_score:.2f})"
 
-    # ----- Camada 4: entidades nomeadas -----
+    # ----- Camada 4: entidades dos marcadores -----
     new_entities = _extract_entities(new_gen_title) + _extract_entities(new_src_title)
-    # Dedup
     seen_e = set()
     new_entities_dedup = []
     for e in new_entities:
@@ -1108,17 +1161,117 @@ def is_duplicate_story(
             continue
         strong, weak = _entities_overlap(new_entities_dedup, ex_ents)
         if strong >= 2:
+            return True, f"{strong} entidades fortes em comum com post existente"
+
+    # ----- Camada 5: fingerprint de conteúdo (NOVA) -----
+    # Fingerprint do artigo NOVO: usa o texto-fonte + títulos (fonte e gerado)
+    # + assunto principal, para maximizar chances de bater entidades/vocabulário.
+    new_content_text = (
+        (new_src_title + ". ") * 2
+        + " ".join([new_gen_title, new_subject])
+        + "\n" + (article.get("text") or "")[:6000]
+    )
+    fp_new = _content_fingerprint(new_content_text)
+
+    for fp_old in content_fingerprints:
+        if not fp_old:
+            continue
+        n_entities, ratio = _content_overlap(fp_new, fp_old)
+        if n_entities >= 2:
             return True, (
-                f"{strong} entidades fortes em comum com post existente "
-                f"(entidades novas: {', '.join(new_entities_dedup[:5])})"
+                f"{n_entities} entidades em comum no conteúdo "
+                f"(post antigo: {fp_old.get('title','')[:60]})"
             )
-        if strong >= 1 and best_score >= 0.25:
+        if ratio >= 0.40:
             return True, (
-                f"entidade em comum e títulos relacionados (score {best_score:.2f}, "
-                f"entidade: {new_entities_dedup[0] if new_entities_dedup else ''})"
+                f"conteúdo muito similar a post existente "
+                f"(vocabulário {ratio*100:.0f}% em comum; "
+                f"post antigo: {fp_old.get('title','')[:60]})"
             )
 
     return False, ""
+
+
+# ============================================================
+# LIMPEZA DE DUPLICATAS JÁ PUBLICADAS
+# ============================================================
+
+def _clean_existing_duplicates(api, posts_list, content_fingerprints):
+    """
+    Detecta posts duplicados já publicados e os marca como RASCUNHO
+    (posts.update com isDraft=True). Não apaga definitivamente.
+
+    Estratégia: para cada post, compara seu fingerprint com os
+    fingerprints dos posts mais antigos (publicados antes dele).
+    Se sobreposição forte → o post mais recente vira rascunho.
+    """
+    if not posts_list:
+        print("✓ Limpeza: nenhum post para analisar.")
+        return
+
+    # Ordena por published (mais antigo primeiro)
+    def _pub_ts(p):
+        pub = p.get("published", "") or ""
+        try:
+            return datetime.fromisoformat(pub.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    ordered = sorted(posts_list, key=_pub_ts)
+
+    fp_by_id = {fp.get("post_id"): fp for fp in content_fingerprints if fp}
+
+    drafts_marked = 0
+    for i, post in enumerate(ordered):
+        post_id = post.get("id")
+        fp_new = fp_by_id.get(post_id)
+        if not fp_new:
+            continue
+
+        # Compara com todos os anteriores
+        for j in range(i):
+            prev_post = ordered[j]
+            prev_id = prev_post.get("id")
+            fp_old = fp_by_id.get(prev_id)
+            if not fp_old:
+                continue
+
+            n_entities, ratio = _content_overlap(fp_new, fp_old)
+            dup = False
+            reason = ""
+            if n_entities >= 2:
+                dup = True
+                reason = f"{n_entities} entidades em comum"
+            elif ratio >= 0.40:
+                dup = True
+                reason = f"vocabulário {ratio*100:.0f}% em comum"
+
+            if dup:
+                try:
+                    api.posts().update(
+                        blogId=BLOGGER_BLOG_ID,
+                        postId=post_id,
+                        body={
+                            "id": post_id,
+                            "title": post.get("title", ""),
+                            "content": "",
+                            "labels": post.get("labels", []),
+                        },
+                        isDraft=True,
+                    ).execute()
+                    drafts_marked += 1
+                    print(
+                        f"✓ Limpeza: post marcado como rascunho — {post.get('title','')[:70]} "
+                        f"({reason}; duplicata de: {prev_post.get('title','')[:60]})"
+                    )
+                except Exception as exc:
+                    print(f"⚠ Limpeza: falha ao marcar rascunho ({post.get('title','')[:50]}): {str(exc)[:150]}")
+                break  # já tratou este post
+
+    if drafts_marked:
+        print(f"✓ Limpeza: {drafts_marked} post(s) duplicado(s) movido(s) para rascunho.")
+    else:
+        print("✓ Limpeza: nenhuma duplicata detectada nos posts existentes.")
 
 
 # ============================================================
@@ -1542,28 +1695,18 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
     schema = {
         "@context": "https://schema.org",
         "@type": "NewsArticle",
-        "mainEntityOfPage": {
-            "@type": "WebPage",
-            "@id": canonical,
-        },
+        "mainEntityOfPage": {"@type": "WebPage", "@id": canonical},
         "headline": titulo_base[:110],
         "description": description,
         "image": [image_url] if image_url else [],
         "datePublished": published,
         "dateModified": date_modified,
-        "author": {
-            "@type": "Organization",
-            "name": BLOG_NAME,
-            "url": BLOG_HOME_URL,
-        },
+        "author": {"@type": "Organization", "name": BLOG_NAME, "url": BLOG_HOME_URL},
         "publisher": {
             "@type": "Organization",
             "name": BLOG_NAME,
             "url": BLOG_HOME_URL,
-            "logo": {
-                "@type": "ImageObject",
-                "url": image_url or f"{BLOG_HOME_URL}/favicon.ico",
-            },
+            "logo": {"@type": "ImageObject", "url": image_url or f"{BLOG_HOME_URL}/favicon.ico"},
         },
         "articleSection": categoria_seo or ("Música Gospel" if is_music_related(article=article, generated=generated) else "Notícias Gospel"),
         "keywords": keywords,
@@ -1587,23 +1730,11 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
         ],
     }
 
-    safe_title = (
-        title.replace("&", "&amp;").replace("<", "&lt;")
-        .replace(">", "&gt;").replace('"', "&quot;")
-    )
-    safe_desc = (
-        description.replace("&", "&amp;").replace("<", "&lt;")
-        .replace(">", "&gt;").replace('"', "&quot;")
-    )
-    safe_keywords = (
-        keywords.replace("&", "&amp;").replace('"', "&quot;")
-    )
-    safe_canonical = (
-        canonical.replace("&", "&amp;").replace('"', "&quot;")
-    )
-    safe_image = (
-        (image_url or "").replace("&", "&amp;").replace('"', "&quot;")
-    )
+    safe_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    safe_desc = description.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    safe_keywords = keywords.replace("&", "&amp;").replace('"', "&quot;")
+    safe_canonical = canonical.replace("&", "&amp;").replace('"', "&quot;")
+    safe_image = (image_url or "").replace("&", "&amp;").replace('"', "&quot;")
     twitter_site = f'<meta name="twitter:site" content="{BLOG_TWITTER}">' if BLOG_TWITTER else ""
 
     json_ld_article = json.dumps(schema, ensure_ascii=False)
@@ -1675,17 +1806,11 @@ def build_seo_head_for_blogger(seo):
 # ============================================================
 
 def _render_inline_image_html(img_url, alt_text):
-    safe_img = (
-        (img_url or "")
-        .replace("&", "&amp;")
-        .replace('"', "&quot;")
-    )
+    safe_img = (img_url or "").replace("&", "&amp;").replace('"', "&quot;")
     safe_alt = (
         (alt_text or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        .replace("&", "&amp;").replace("<", "&lt;")
+        .replace(">", "&gt;").replace('"', "&quot;")
     )
     if not safe_img:
         return ""
@@ -1706,25 +1831,18 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     titulo_exibicao = seo.get("titulo_base") or generated.get("titulo", "")
     safe_title = (
         titulo_exibicao
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        .replace("&", "&amp;").replace("<", "&lt;")
+        .replace(">", "&gt;").replace('"', "&quot;")
     )
 
     image_url = final_image or article["image"]
     safe_image = image_url.replace("&", "&amp;").replace('"', "&quot;")
 
-    safe_source_url = (
-        article["url"]
-        .replace("&", "&amp;")
-        .replace('"', "&quot;")
-    )
+    safe_source_url = article["url"].replace("&", "&amp;").replace('"', "&quot;")
 
     seo_head = build_seo_head_for_blogger(seo)
 
     content = []
-
     if seo_head:
         content.append(seo_head)
 
@@ -1746,8 +1864,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         if paragraph:
             article_paragraphs.append(paragraph)
 
-    inline_images = list(article.get("inline_images") or [])
-    inline_images = inline_images[:1]
+    inline_images = list(article.get("inline_images") or [])[:1]
     inline_images.sort(key=lambda item: item.get("after_paragraph", 9999))
 
     body_parts = []
@@ -1764,11 +1881,9 @@ def html(article, generated, final_image="", image_origin="", seo=None):
             target = 0
         if target > total_paras:
             target = total_paras
-
         while para_idx < target:
             body_parts.append(f"<p>{article_paragraphs[para_idx]}</p>")
             para_idx += 1
-
         rendered = _render_inline_image_html(img_info.get("url", ""), titulo_exibicao)
         if rendered:
             body_parts.append(rendered)
@@ -1791,12 +1906,8 @@ def html(article, generated, final_image="", image_origin="", seo=None):
             'frameborder="0" '
             'allow="accelerometer; autoplay; clipboard-write; encrypted-media; '
             'gyroscope; picture-in-picture; web-share" '
-            'allowfullscreen '
-            'loading="lazy" '
-            'title="Vídeo da matéria">'
-            '</iframe>'
-            '</div>'
-            '</div>'
+            'allowfullscreen loading="lazy" title="Vídeo da matéria">'
+            '</iframe></div></div>'
         )
 
     spotify_block = (
@@ -1812,8 +1923,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         'loading="lazy" title="Playlist Rádio Luz Gospel no Spotify"></iframe>'
         '<p style="text-align:center;margin-top:0.8rem;font-size:0.95rem;color:#666;font-family:Arial,sans-serif;">'
         'Ouça a seleção especial da <strong>Rádio Luz Gospel</strong> 📻🙏'
-        '</p>'
-        '</div>'
+        '</p></div>'
     )
     content.append(spotify_block)
 
@@ -1822,11 +1932,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         "https://t.me/radioluzgospelnoticias",
     ).strip() or "https://t.me/radioluzgospelnoticias"
 
-    safe_telegram_channel = (
-        telegram_channel
-        .replace("&", "&amp;")
-        .replace('"', "&quot;")
-    )
+    safe_telegram_channel = telegram_channel.replace("&", "&amp;").replace('"', "&quot;")
 
     content.append(
         '<div style="margin:24px 0;padding:18px;'
@@ -1838,8 +1944,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
         'rel="noopener" style="display:inline-block;padding:10px 16px;'
         'border-radius:8px;text-decoration:none;font-weight:bold;">'
         '👉 ENTRAR NO CANAL DO TELEGRAM'
-        '</a></p>'
-        '</div>'
+        '</a></p></div>'
     )
 
     source_marker = f"<!-- RADIO_LUZ_GOSPEL_SOURCE_URL: {safe_source_url} -->"
@@ -1856,7 +1961,6 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     if safe_subject:
         subject_marker = f"\n<!-- RADIO_LUZ_GOSPEL_SUBJECT: {safe_subject} -->"
 
-    # NOVO: entidades extraídas para anti-duplicidade em próximas execuções
     ents = []
     try:
         ents = _extract_entities(raw_source_title) + _extract_entities(seo.get("titulo_base") or "")
@@ -1911,8 +2015,15 @@ def main():
         existing_subjects,
         existing_source_titles,
         existing_entities,
+        content_fingerprints,
+        posts_list,
         posts_count,
     ) = existing(api)
+
+    # Limpeza opcional de duplicatas JÁ publicadas
+    if CLEAN_DUPLICATES:
+        print("✓ Limpeza: CLEAN_DUPLICATES=true — analisando posts existentes...")
+        _clean_existing_duplicates(api, posts_list, content_fingerprints)
 
     update_existing_music_labels(api)
 
@@ -1947,6 +2058,7 @@ def main():
                     existing_subjects,
                     existing_source_titles,
                     existing_entities,
+                    content_fingerprints,
                 )
                 if pre_dup:
                     pre_duplicates += 1
@@ -1960,7 +2072,7 @@ def main():
     print(f"Fontes encontradas: {source_summary}")
     print(f"Puladas: {prefiltered_out + pre_duplicates}")
     if pre_duplicates:
-        print(f"⚠ Duplicadas por assunto/título/entidades (pré-IA): {pre_duplicates}")
+        print(f"⚠ Duplicadas por conteúdo (pré-IA): {pre_duplicates}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
     print(f"Novas matérias musicais: {len(candidates)}")
@@ -1995,6 +2107,7 @@ def main():
             existing_subjects,
             existing_source_titles,
             existing_entities,
+            content_fingerprints,
         )
         if dup:
             post_duplicates += 1
@@ -2028,7 +2141,6 @@ def main():
                                 image_origin=image_origin, seo=seo),
                 "labels": seo["labels"],
             }
-
             try:
                 post_body["customMetaData"] = seo["description"]
             except Exception:
@@ -2043,7 +2155,6 @@ def main():
             published += 1
             old_source_urls.add(normalized)
 
-            # Atualiza memória local (bloqueia duplicatas dentro da mesma execução)
             if seo.get("title"):
                 existing_titles.append(seo["title"])
             if seo.get("titulo_base"):
@@ -2053,7 +2164,6 @@ def main():
             if seo.get("assunto"):
                 existing_subjects.append(seo["assunto"])
 
-            # Registra entidades para próximas execuções
             try:
                 new_ents = _extract_entities(article.get("title", "")) + _extract_entities(seo.get("titulo_base") or "")
                 seen_e = set()
@@ -2064,6 +2174,23 @@ def main():
                         new_ents_dedup.append(e)
                 if new_ents_dedup:
                     existing_entities.append(new_ents_dedup)
+            except Exception:
+                pass
+
+            # Atualiza fingerprints locais (para bloquear duplicata dentro da mesma execução)
+            try:
+                fp_new = _content_fingerprint(
+                    (article.get("title", "") + " " + generated.get("titulo", "")
+                     + " " + generated.get("resumo", "")
+                     + " " + generated.get("materia", ""))[:12000]
+                )
+                content_fingerprints.append({
+                    "post_id": response.get("id", ""),
+                    "post_url": normalize_url(response.get("url", "")),
+                    "title": seo["title"],
+                    "entities": fp_new["entities"],
+                    "rare_words": fp_new["rare_words"],
+                })
             except Exception:
                 pass
 
@@ -2146,8 +2273,7 @@ def facebook_promote(post, source_name_text):
     endpoint = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/feed"
     try:
         r = requests.post(endpoint, data={
-            "message": text[:60000],
-            "link": url,
+            "message": text[:60000], "link": url,
             "access_token": FACEBOOK_PAGE_ACCESS_TOKEN,
         }, timeout=TIMEOUT)
         if r.ok:
@@ -2214,17 +2340,12 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
         "data": {
             "datasets": [{
                 "data": [{"x": 0, "y": 0}],
-                "pointRadius": 0,
-                "pointHitRadius": 0,
-                "showLine": False,
-                "backgroundColor": "rgba(0,0,0,0)",
-                "borderWidth": 0,
+                "pointRadius": 0, "pointHitRadius": 0, "showLine": False,
+                "backgroundColor": "rgba(0,0,0,0)", "borderWidth": 0,
             }],
         },
         "options": {
-            "responsive": False,
-            "maintainAspectRatio": False,
-            "animation": False,
+            "responsive": False, "maintainAspectRatio": False, "animation": False,
             "layout": {"padding": 0},
             "plugins": {
                 "legend": {"display": False},
@@ -2232,29 +2353,21 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
                 "annotation": {
                     "annotations": {
                         "headline_box": {
-                            "type": "box",
-                            "xMin": -0.84, "xMax": 0.84,
+                            "type": "box", "xMin": -0.84, "xMax": 0.84,
                             "yMin": -0.89, "yMax": -0.60,
                             "backgroundColor": "rgba(245, 190, 0, 0.82)",
                             "borderColor": "rgba(0, 105, 230, 0.95)",
-                            "borderWidth": 3,
-                            "borderRadius": 28,
-                            "drawTime": "afterDatasetsDraw",
-                            "z": 10,
+                            "borderWidth": 3, "borderRadius": 28,
+                            "drawTime": "afterDatasetsDraw", "z": 10,
                         },
                         "headline": {
-                            "type": "label",
-                            "xValue": 0, "yValue": -0.745,
-                            "content": lines,
-                            "color": "#FFFFFF",
-                            "backgroundColor": "rgba(0,0,0,0)",
-                            "borderWidth": 0,
+                            "type": "label", "xValue": 0, "yValue": -0.745,
+                            "content": lines, "color": "#FFFFFF",
+                            "backgroundColor": "rgba(0,0,0,0)", "borderWidth": 0,
                             "font": {"size": font_size, "weight": "bold"},
-                            "position": "center",
-                            "textAlign": "center",
+                            "position": "center", "textAlign": "center",
                             "padding": {"top": 10, "bottom": 10, "left": 26, "right": 26},
-                            "drawTime": "afterDatasetsDraw",
-                            "z": 20,
+                            "drawTime": "afterDatasetsDraw", "z": 20,
                             "callout": {"display": False},
                         },
                     }
@@ -2273,10 +2386,8 @@ def _quickchart_social_overlay(title, excerpt, width=1080, height=1350, backgrou
     try:
         encoded = quote(json.dumps(config, ensure_ascii=False, separators=(",", ":")))
         return (
-            f"https://quickchart.io/chart?"
-            f"width={width}&height={height}"
-            f"&devicePixelRatio=1&version=4"
-            f"&format=png&c={encoded}"
+            f"https://quickchart.io/chart?width={width}&height={height}"
+            f"&devicePixelRatio=1&version=4&format=png&c={encoded}"
         )
     except Exception as exc:
         print(f"⚠ QuickChart: erro ao montar arte: {exc}")
@@ -2288,14 +2399,10 @@ def instagram_art_url(post):
     if not image_url:
         print("⚠ Instagram: matéria sem imagem; arte não pode ser criada.")
         return ""
-
     title = str(post.get("title", "")).strip()
-    chart_url = _quickchart_social_overlay(
-        title, "", width=1080, height=1350, background_image_url=image_url,
-    )
+    chart_url = _quickchart_social_overlay(title, "", width=1080, height=1350, background_image_url=image_url)
     if not chart_url:
         return ""
-
     for attempt in range(2):
         try:
             warm = requests.get(chart_url, stream=True, timeout=30)
@@ -2321,8 +2428,7 @@ def _instagram_check_last_post():
         r = requests.get(
             f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}/media",
             params={
-                "fields": "id,timestamp,media_type",
-                "limit": 1,
+                "fields": "id,timestamp,media_type", "limit": 1,
                 "access_token": INSTAGRAM_ACCESS_TOKEN,
             },
             timeout=TIMEOUT,
@@ -2379,11 +2485,8 @@ def instagram_promote(post, source_name_text):
 
         create = requests.post(
             f"{base}/media",
-            data={
-                "image_url": image_url,
-                "caption": caption[:2200],
-                "access_token": INSTAGRAM_ACCESS_TOKEN,
-            },
+            data={"image_url": image_url, "caption": caption[:2200],
+                  "access_token": INSTAGRAM_ACCESS_TOKEN},
             timeout=TIMEOUT,
         )
         if not create.ok:
@@ -2428,7 +2531,7 @@ def instagram_promote(post, source_name_text):
             return True
 
         if publish.status_code == 403:
-            print(f"⚠ Divulgação: Instagram retornou 403 (possível anti-spam); verificando se publicou...")
+            print("⚠ Divulgação: Instagram retornou 403 (possível anti-spam); verificando se publicou...")
             time.sleep(3)
             if _instagram_check_last_post():
                 print("✓ Divulgação: Instagram publicou apesar do 403 (anti-spam) — tratado como sucesso")
@@ -2460,8 +2563,7 @@ def telegram_promote(post, source_name_text):
     endpoint = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
         r = requests.post(endpoint, json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": text[:3900],
+            "chat_id": TELEGRAM_CHAT_ID, "text": text[:3900],
             "disable_web_page_preview": False,
         }, timeout=TIMEOUT)
         if r.status_code == 200:
@@ -2503,9 +2605,7 @@ def promote_new_posts(before_urls):
             print("Divulgação: nenhuma publicação nova nesta execução.")
             return
         posts = api_after.posts().list(
-            blogId=BLOGGER_BLOG_ID,
-            maxResults=500,
-            fetchBodies=True,
+            blogId=BLOGGER_BLOG_ID, maxResults=500, fetchBodies=True,
         ).execute().get("items", [])
         post_url = new_urls[0]
         post = next(
@@ -2525,7 +2625,7 @@ def promote_new_posts(before_urls):
         print("⚠ Divulgação: erro na etapa pós-publicação:", exc)
 
 
-print("VERSÃO 12.61 ATIVA: anti-duplicidade por entidades + título-fonte exato | uma imagem no corpo | SEO | vídeos | Spotify | Telegram")
+print("VERSÃO 12.62 ATIVA: anti-duplicidade por conteúdo do site (fingerprint) | limpeza opcional | SEO | vídeos | Spotify | Telegram")
 
 _before_urls = set()
 if PROMO_ENABLED:
