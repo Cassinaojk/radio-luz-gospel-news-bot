@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 13.3 (5 Fontes + Anti-Duplicidade Rígida + Filtro de Hoje Flexível)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.0 (5 Fontes + Anti-Duplicidade Rígida + Sem Filtro Musical)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -115,8 +115,8 @@ MAX_LINKS_PER_SOURCE = 80
 # ============================================================
 MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "1"))
 
-MIN_SOURCE_CHARS = 500
-MIN_SOURCE_PARAGRAPHS = 3
+MIN_SOURCE_CHARS = 400
+MIN_SOURCE_PARAGRAPHS = 2
 TIMEOUT = 25
 
 GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -129,78 +129,6 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b").strip()
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip()
 AI_PROVIDER_TIMEOUT = int(os.getenv("AI_PROVIDER_TIMEOUT", "90"))
 
-# ===== Filtro musical =====
-MUSIC_STRONG_TERMS = (
-    "lancamento", "lancamento musical", "lancou", "lanca",
-    "novo single", "nova musica", "musica nova", "single",
-    "album", "ep", "videoclipe", "clipe", "cancao", "faixa",
-    "projeto musical", "carreira musical", "gravacao musical",
-    "show", "shows", "turne", "festival", "concerto",
-    "apresentacao musical", "agenda de shows", "palco",
-    "ingressos", "bilheteria", "ao vivo", "feat", "featuring",
-    "playlist", "cover musical", "novo projeto musical",
-    "cronograma de shows", "turnê", "turnê nacional",
-    "louvor", "adoracao", "worship", "gospel music", "musica gospel",
-    "cantor gospel", "cantora gospel", "banda gospel",
-)
-MUSIC_SUPPORT_TERMS = (
-    "cantor", "cantora", "artista", "banda", "dupla", "musico",
-    "musica", "musical", "musicista", "gravadora", "compositor",
-    "compositora", "composicao", "instrumental", "vocal", "voz",
-    "repertorio", "hit", "producao musical", "produtor musical",
-    "worship", "louvor",
-)
-
-def _music_norm(value):
-    value = unicodedata.normalize("NFKD", str(value or ""))
-    value = "".join(c for c in value if not unicodedata.combining(c))
-    return re.sub(r"\s+", " ", value.lower()).strip()
-
-def is_music_related(article=None, generated=None, raw_text=""):
-    article = article or {}
-    generated = generated or {}
-    parts = [
-        article.get("title", ""),
-        article.get("text", ""),
-        generated.get("titulo", ""),
-        generated.get("resumo", ""),
-        generated.get("materia", ""),
-        raw_text,
-    ]
-    combined = _music_norm(" ".join(str(x or "") for x in parts))
-    title = _music_norm(article.get("title", "") or generated.get("titulo", ""))
-    if not combined:
-        return False
-
-    if any(term in title for term in MUSIC_STRONG_TERMS):
-        return True
-
-    strong_hits = sum(1 for term in MUSIC_STRONG_TERMS if term in combined)
-    support_hits = sum(1 for term in MUSIC_SUPPORT_TERMS if term in combined)
-
-    if strong_hits >= 1 and support_hits >= 1:
-        return True
-    if strong_hits >= 2:
-        return True
-    return False
-
-def quick_music_prefilter(article):
-    title = _music_norm(article.get("title", ""))
-    head = _music_norm(article.get("text", "")[:800])
-    combined = f"{title} {head}"
-
-    if any(t in title for t in MUSIC_STRONG_TERMS):
-        return True, ""
-
-    strong = sum(1 for t in MUSIC_STRONG_TERMS if t in combined)
-    support = sum(1 for t in MUSIC_SUPPORT_TERMS if t in combined)
-    if strong >= 1 and support >= 1:
-        return True, ""
-    if strong >= 2:
-        return True, ""
-
-    return False, "sem termos musicais fortes no título/trecho inicial"
-
 # ===== Fontes (5 fontes) =====
 SOURCES = [
     {
@@ -211,7 +139,6 @@ SOURCES = [
             "https://www.newsgospel.com.br/feed",
             "https://newsgospel.com.br/feed/",
         ],
-        "music_page": True,
     },
     {
         "nome": "Folha Gospel - Música",
@@ -220,9 +147,6 @@ SOURCES = [
             "https://folhagospel.com/feed/",
             "https://folhagospel.com/musica/feed/",
         ],
-        "section_only": True,
-        "music_page": True,
-        "path_prefix": "",
     },
     {
         "nome": "Guiame - Música",
@@ -231,9 +155,6 @@ SOURCES = [
             "https://guiame.com.br/rss.xml",
             "https://guiame.com.br/feed/",
         ],
-        "section_only": True,
-        "music_page": True,
-        "path_prefix": "/musica",
     },
     {
         "nome": "iGospel",
@@ -243,7 +164,6 @@ SOURCES = [
             "https://www.igospel.org.br/feed",
             "https://igospel.org.br/feed/",
         ],
-        "music_page": True,
     },
     {
         "nome": "Fuxico Gospel",
@@ -252,7 +172,6 @@ SOURCES = [
             "https://www.fuxicogospel.com.br/feed/",
             "https://www.fuxicogospel.com.br/feed",
         ],
-        "music_page": False,
     },
 ]
 
@@ -278,7 +197,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/13.3)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.0)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -459,7 +378,7 @@ def resolve_repo_image_url(relative_path):
     for candidate in candidates:
         try:
             r = requests.get(candidate, stream=True, timeout=12,
-                             headers={"User-Agent": "RadioLuzGospel/13.3"})
+                             headers={"User-Agent": "RadioLuzGospel/14.0"})
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
@@ -1051,7 +970,6 @@ def check_blogger_for_duplicate(api, article_title):
             )
             if sim >= 0.45:
                 return True, post_title
-            # Verificação extra: se TODOS os search_terms estão no título do post
             post_norm = _tech_norm(post_title)
             if all(term in post_norm for term in search_terms):
                 return True, post_title
@@ -1311,25 +1229,22 @@ Crie título, resumo e matéria em português do Brasil.
 A matéria deve ter aproximadamente 700 a 1200 palavras.
 Não diga que foi escrita por IA.
 
-CRITÉRIO DE PUBLICAÇÃO (leia com atenção — a regra é PERMISSIVA):
-Você DEVE marcar publicar=true sempre que a matéria tiver QUALQUER
-elemento musical, gospel ou de louvor. Exemplos que contam como música:
-- lançamento de single, álbum, EP, videoclipe ou DVD;
-- show, turnê, cronograma de shows, agenda de apresentações;
-- festival, concerto, apresentação ao vivo, live;
-- entrevista com cantor, cantora, banda, dupla, músico ou produtor musical;
-- evento gospel com louvor, adoração ou ministração musical;
-- culto, conferência ou congresso com participação musical;
-- mudança de formação, entrada ou saída de integrante de banda;
-- homenagem, prêmio ou indicação envolvendo música gospel;
-- testemunho de artista musical;
-- qualquer menção a banda, cantor, cantora, grupo, duo, coral, ministério
-  de louvor, gravadora, compositor, instrumento, música, canção ou álbum.
+CRITÉRIO DE PUBLICAÇÃO (leia com atenção):
+Você DEVE marcar publicar=true para QUALQUER notícia que tenha
+relevância jornalística e conteúdo gospel/cristão/evangélico, incluindo:
+- música gospel, lançamentos, shows, turnês, festivais;
+- testemunhos de artistas, pastores e líderes religiosos;
+- eventos gospel, conferências, congressos, cultos especiais;
+- política religiosa, liberdade religiosa, perseguição a cristãos;
+- ações sociais de igrejas, projetos missionários, missões;
+- notícias sobre denominações, convenções, alianças;
+- entrevistas, declarações, posicionamentos de líderes cristãos;
+- prêmios, homenagens, indicações envolvendo artistas gospel;
+- qualquer notícia que tenha relação com o universo gospel/cristão.
 
-Marque publicar=false SOMENTE quando a matéria for claramente de outro
-assunto: política partidária, economia, esporte, saúde, tecnologia,
-comportamento sem relação musical, denúncia policial sem ligação com
-música, ou artigo doutrinário sem qualquer referência a música.
+Marque publicar=false SOMENTE se a notícia for COMPLETAMENTE alheia
+ao universo gospel/cristão (ex.: futebol, economia geral, política
+partidária sem relação com igrejas, celebridades não-religiosas).
 
 REGRA DE OURO: se houver DÚVIDA, marque publicar=true.
 
@@ -1339,15 +1254,14 @@ OUTRAS REGRAS:
 - não copiar frases ou parágrafos da fonte;
 - não traduzir nem reproduzir a estrutura da matéria original;
 - retornar SOMENTE JSON válido, sem Markdown;
-- no campo "assunto_principal", informe o NOME DA PESSOA, BANDA OU GRUPO
-  musical mais importante citado na matéria (ex.: "Banda Catedral",
-  "Kim", "Renascer Praise"). Se não houver pessoa ou banda específica,
+- no campo "assunto_principal", informe o NOME DA PESSOA, BANDA, GRUPO
+  ou IGREJA mais importante citado na matéria. Se não houver,
   deixe string vazia "".
 - no campo "palavras_chave", informe uma lista com 5 a 10 palavras-chave
-  de SEO relacionadas ao conteúdo (nomes, gêneros, temas, marcas).
+  de SEO relacionadas ao conteúdo.
 - no campo "categoria_seo", informe a categoria principal do assunto:
   "Música Gospel", "Lançamento", "Show", "Entrevista", "Evento",
-  "Notícia Gospel" ou "Testemunho".
+  "Notícia Gospel", "Testemunho", "Política Religiosa" ou "Missões".
 
 FORMATO:
 {{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"...","palavras_chave":["..."],"categoria_seo":"..."}}
@@ -1489,8 +1403,6 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
     keywords = ", ".join(kw[:SEO_KEYWORDS_MAX])
 
     labels = ["Notícias", "Rádio Luz Gospel"]
-    if is_music_related(article=article, generated=generated):
-        labels.insert(1, "Músicas")
     if categoria_seo:
         cat_clean = re.sub(r"\s+", " ", categoria_seo).strip()
         if cat_clean and cat_clean not in labels:
@@ -1537,7 +1449,7 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
             "url": BLOG_HOME_URL,
             "logo": {"@type": "ImageObject", "url": image_url or f"{BLOG_HOME_URL}/favicon.ico"},
         },
-        "articleSection": categoria_seo or ("Música Gospel" if is_music_related(article=article, generated=generated) else "Notícias Gospel"),
+        "articleSection": categoria_seo or "Notícias Gospel",
         "keywords": keywords,
         "inLanguage": "pt-BR",
         "isAccessibleForFree": True,
@@ -1829,7 +1741,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     )
 
 def main():
-    print("Fontes: News Gospel + Folha Gospel Música + Guiame Música + iGospel + Fuxico Gospel")
+    print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel + Fuxico Gospel")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
 
@@ -1864,16 +1776,7 @@ def main():
                 continue
             article = get_article(normalized)
             if article:
-                if not is_music_related(article=article):
-                    prefiltered_out += 1
-                    continue
-                passed, reason = quick_music_prefilter(article)
-                if not passed:
-                    prefiltered_out += 1
-                    print(f"⚠ Pulada (pré-filtro): {article['title'][:70]} — {reason}")
-                    continue
-
-                # VERIFICAÇÃO ANTI-DUPLICIDADE ANTES DA IA (RÍGIDA)
+                # SEM FILTRO MUSICAL — aceita qualquer notícia do dia/ontem
                 pre_dup, pre_reason = is_duplicate_story(
                     article,
                     {"titulo": article.get("title", ""), "assunto_principal": ""},
@@ -1898,7 +1801,7 @@ def main():
         print(f"⚠ Duplicadas por conteúdo (pré-IA): {pre_duplicates}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
-    print(f"Novas matérias musicais de hoje/ontem: {len(candidates)}")
+    print(f"Novas matérias de hoje/ontem: {len(candidates)}")
 
     published = 0
     failed = 0
@@ -2053,6 +1956,6 @@ def main():
     if post_duplicates:
         print(f"⚠ Duplicadas detectadas após IA: {post_duplicates}")
 
-print("VERSÃO 13.3 ATIVA: 5 Fontes | Anti-Duplicidade Rígida | Filtro Hoje/Ontem | SEO | Vídeos | Spotify | Telegram")
+print("VERSÃO 14.0 ATIVA: 5 Fontes | Sem Filtro Musical | Anti-Duplicidade Rígida | SEO | Vídeos | Spotify | Telegram")
 
 main()
