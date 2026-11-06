@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 13.1 (3 Fontes + Filtro de Hoje Flexível + Anti-Duplicidade API)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 13.2 (5 Fontes + Filtro de Hoje Flexível + Anti-Duplicidade API)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -201,7 +201,7 @@ def quick_music_prefilter(article):
 
     return False, "sem termos musicais fortes no título/trecho inicial"
 
-# ===== Fontes (apenas as 3 solicitadas) =====
+# ===== Fontes (5 fontes) =====
 SOURCES = [
     {
         "nome": "News Gospel",
@@ -235,6 +235,25 @@ SOURCES = [
         "music_page": True,
         "path_prefix": "/musica",
     },
+    {
+        "nome": "iGospel",
+        "url": "https://www.igospel.org.br/",
+        "feeds": [
+            "https://www.igospel.org.br/feed/",
+            "https://www.igospel.org.br/feed",
+            "https://igospel.org.br/feed/",
+        ],
+        "music_page": True,
+    },
+    {
+        "nome": "Fuxico Gospel",
+        "url": "https://www.fuxicogospel.com.br/",
+        "feeds": [
+            "https://www.fuxicogospel.com.br/feed/",
+            "https://www.fuxicogospel.com.br/feed",
+        ],
+        "music_page": False,
+    },
 ]
 
 BAD_PATHS = (
@@ -259,7 +278,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/13.1)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/13.2)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -440,7 +459,7 @@ def resolve_repo_image_url(relative_path):
     for candidate in candidates:
         try:
             r = requests.get(candidate, stream=True, timeout=12,
-                             headers={"User-Agent": "RadioLuzGospel/13.1"})
+                             headers={"User-Agent": "RadioLuzGospel/13.2"})
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
@@ -1803,7 +1822,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     )
 
 def main():
-    print("Fontes: News Gospel + Folha Gospel Música + Guiame Música")
+    print("Fontes: News Gospel + Folha Gospel Música + Guiame Música + iGospel + Fuxico Gospel")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
 
@@ -2024,6 +2043,6 @@ def main():
     if post_duplicates:
         print(f"⚠ Duplicadas detectadas após IA: {post_duplicates}")
 
-print("VERSÃO 13.1 ATIVA: 3 Fontes | Filtro Hoje/Ontem | Bloqueio via API | SEO | Vídeos | Spotify | Telegram")
+print("VERSÃO 13.2 ATIVA: 5 Fontes | Filtro Hoje/Ontem | Bloqueio via API | SEO | Vídeos | Spotify | Telegram")
 
 main()
