@@ -48,7 +48,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.8 (5 Fontes + Scraping HTML + Telegram + Instagram)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.9 (System User API para Instagram)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -148,8 +148,8 @@ SOURCES = [
 BAD_PATHS = (
     "/category/", "/tag/", "/author/", "/page/", "/search/", "/feed/",
     "/wp-json/", "/comments/", "/sobre", "/contato", "/contact",
-    "/politica", "/privacidade", "/privacy", "/anuncie", "/publicidade",
-    "/advertising", "/login", "/cadastro", "/register", "/sitemap", "/robots.txt",
+    "/politica/", "/privacidade/", "/privacy/", "/anuncie/", "/publicidade/",
+    "/advertising/", "/login/", "/cadastro/", "/register/", "/sitemap/", "/robots.txt",
 )
 
 SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twitter.com/intent", "x.com/intent", "whatsapp.com/", "t.me/share", "linkedin.com/share")
@@ -157,7 +157,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.8)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.9)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -497,8 +497,8 @@ def promote_instagram(title, post_url, image_url, summary=""):
         promo_url = build_promo_url(post_url)
         caption = f"📰 {title}\n\n{summary[:200]}\n\n👉 Leia mais: {promo_url}"
         
-        # Usa graph.instagram.com para tokens IGAA...
-        base_url = f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}"
+        # URL alterada para graph.facebook.com para ser compatível com o token System User (EAA...)
+        base_url = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}"
         
         # 1. Cria container
         r1 = requests.post(
@@ -507,7 +507,7 @@ def promote_instagram(title, post_url, image_url, summary=""):
             timeout=20,
         )
         if r1.status_code != 200 or "id" not in r1.json():
-            print(f"⚠ Instagram: falha ao criar container ({r1.status_code}): {r1.text[:150]}")
+            print(f"⚠ Instagram: falha ao criar container ({r1.status_code}): {r1.text[:200]}")
             return False
         container_id = r1.json()["id"]
         
@@ -523,7 +523,7 @@ def promote_instagram(title, post_url, image_url, summary=""):
         if r2.status_code == 200 and "id" in r2.json():
             print(f"✓ Instagram: post publicado")
             return True
-        print(f"⚠ Instagram: falha ao publicar ({r2.status_code}): {r2.text[:150]}")
+        print(f"⚠ Instagram: falha ao publicar ({r2.status_code}): {r2.text[:200]}")
     except Exception as e:
         print(f"⚠ Instagram: erro {str(e)[:150]}")
     return False
@@ -669,6 +669,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 def main():
     print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel + Fuxico Gospel")
     print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'} | Instagram={'ON' if INSTAGRAM_ENABLED and INSTAGRAM_USER_ID else 'OFF'}")
+    print(f"Instagram User ID: {INSTAGRAM_USER_ID}")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls, existing_titles, posts_count = existing(api)
@@ -758,6 +759,6 @@ def main():
     print(f"Ignoradas: {ignored}")
     print(f"Falhas: {failed}")
 
-print("VERSÃO 14.8 ATIVA: 5 Fontes | Scraping HTML + RSS | Divulgação Social (Telegram/Instagram)")
+print("VERSÃO 14.9 ATIVA: 5 Fontes | Scraping HTML + RSS | Divulgação Social (Telegram/Instagram)")
 print(f"MAX_AGE_DAYS configurado: {MAX_AGE_DAYS}")
 main()
