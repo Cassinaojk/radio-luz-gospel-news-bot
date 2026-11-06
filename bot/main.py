@@ -39,7 +39,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.2 (5 Fontes + Anti-Duplicidade Rígida + Filtro de Data 4 dias)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.3 (5 Fontes + Scraping HTML + Filtro de Data 4 dias)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -76,7 +76,7 @@ MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "2"))
 MAX_GEMINI_TEXT_CALLS_PER_RUN = int(os.getenv("MAX_GEMINI_TEXT_CALLS_PER_RUN", "6"))
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BASE_SECONDS = 4
-MAX_LINKS_PER_SOURCE = 80
+MAX_LINKS_PER_SOURCE = 120
 
 # ============================================================
 # FILTRO DE DATA: aceita notícias de até 4 dias atrás
@@ -137,7 +137,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.2)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.3)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -310,33 +310,53 @@ def get_article(url):
     return {"url": normalize_url(url), "title": title, "date": d, "image": img, "text": text[:16000], "videos": vv, "inline_images": inline_imgs}
 
 def links(source):
+    """
+    Coleta links de duas formas:
+    1. Feed RSS (rápido, mas pode estar atrasado)
+    2. Scraping direto da página HTML (captura notícias recentes que o RSS não inclui)
+    """
     out, seen = [], set()
     source_host = urlparse(source["url"]).netloc.lower()
 
     def host_matches(u):
         h = urlparse(u).netloc.lower()
-        return h == source_host or h.endswith("." + source_host) or h.replace("www.", "", 1) == source_host.replace("www.", "", 1) or h.replace("www.", "", 1).endswith("." + source_host.replace("www.", "", 1))
+        h_no_www = h.replace("www.", "", 1)
+        s_no_www = source_host.replace("www.", "", 1)
+        return h == source_host or h.endswith("." + source_host) or h_no_www == s_no_www or h_no_www.endswith("." + s_no_www)
 
+    # ---- 1. RSS ----
     for feed in source["feeds"]:
         x = soup(feed, True)
-        if not x: continue
+        if not x:
+            continue
         for item in x.find_all(["item", "entry"]):
             n = item.find("link")
-            if not n: continue
+            if not n:
+                continue
             u = normalize_url(n.get("href") or n.get_text(strip=True) or "")
             if u and not bad_url(u) and host_matches(u) and u not in seen:
                 seen.add(u)
                 out.append(u)
 
+    rss_count = len(out)
+
+    # ---- 2. Scraping HTML da página de listagem ----
     x = soup(source["url"])
     if x:
         for a in x.find_all("a", href=True):
             u = normalize_url(urljoin(source["url"], a["href"]))
-            if not bad_url(u) and host_matches(u) and u not in seen:
+            if not u or bad_url(u) or not host_matches(u):
+                continue
+            if u in seen:
+                continue
+            # Filtro: só aceita links que parecem artigos (path com 2+ níveis)
+            path = urlparse(u).path.strip("/")
+            if path.count("/") >= 1 and len(path) > 10:
                 seen.add(u)
                 out.append(u)
 
-    print(f"Links encontrados em {source['nome']}: {len(out)}")
+    html_count = len(out) - rss_count
+    print(f"Links em {source['nome']}: {len(out)} (RSS: {rss_count}, HTML: {html_count})")
     return out[:MAX_LINKS_PER_SOURCE]
 
 def blogger():
@@ -718,7 +738,7 @@ def main():
     if pre_dups: print(f"⚠ Duplicadas (pré-IA): {pre_dups}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
-    print(f"Novas matérias de hoje/ontem/anteontem: {len(candidates)}")
+    print(f"Novas matérias aceitas: {len(candidates)}")
 
     published = failed = ignored = post_dups = 0
     while candidates and published < MAX_POSTS_PER_RUN:
@@ -784,5 +804,5 @@ def main():
     print(f"Falhas: {failed}")
     if post_dups: print(f"⚠ Duplicadas (pós-IA): {post_dups}")
 
-print("VERSÃO 14.2 ATIVA: 5 Fontes | Filtro de Data 4 dias | Anti-Duplicidade Rígida | SEO | Spotify | Telegram")
+print("VERSÃO 14.3 ATIVA: 5 Fontes | Scraping HTML + RSS | Filtro de Data 4 dias | Anti-Duplicidade Rígida")
 main()
