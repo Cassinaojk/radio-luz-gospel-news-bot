@@ -22,11 +22,17 @@ def print(*args, **kwargs):
         or message.startswith("Ignoradas:")
         or message.startswith("Falhas:")
         or message.startswith("✓ Publicada:")
+        or message.startswith("✓ Telegram:")
+        or message.startswith("✓ Facebook:")
+        or message.startswith("✓ Instagram:")
         or message.startswith("⚠ Pulada:")
         or message.startswith("⚠ Duplicada:")
         or message.startswith("⚠ Notícia antiga:")
         or message.startswith("⚠ Conteúdo:")
         or message.startswith("⚠ Data:")
+        or message.startswith("⚠ Telegram:")
+        or message.startswith("⚠ Facebook:")
+        or message.startswith("⚠ Instagram:")
         or message.startswith("MAX_AGE_DAYS")
         or message.startswith("Links em")
         or message.startswith("✓ Data OK")
@@ -39,12 +45,12 @@ def print(*args, **kwargs):
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from datetime import datetime, date, timezone, timedelta
-from urllib.parse import urlparse, urljoin, quote
+from urllib.parse import urlparse, urljoin, quote, urlencode
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.6 (5 Fontes + Scraping HTML + Sem Filtro de Similaridade)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.7 (5 Fontes + Scraping HTML + Divulgação Social)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -59,6 +65,23 @@ BLOG_TWITTER = os.getenv("BLOG_TWITTER", "").strip()
 SEO_TITLE_SUFFIX = os.getenv("SEO_TITLE_SUFFIX", f" | {BLOG_NAME}").strip()
 SEO_DESCRIPTION_MAX = int(os.getenv("SEO_DESCRIPTION_MAX", "160"))
 SEO_KEYWORDS_MAX = int(os.getenv("SEO_KEYWORDS_MAX", "12"))
+
+# ===== Divulgação social =====
+PROMO_ENABLED = os.getenv("PROMO_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+PROMO_UTM_SOURCE = os.getenv("PROMO_UTM_SOURCE", "telegram").strip() or "telegram"
+PROMO_UTM_MEDIUM = os.getenv("PROMO_UTM_MEDIUM", "social").strip() or "social"
+PROMO_UTM_CAMPAIGN = os.getenv("PROMO_UTM_CAMPAIGN", "noticias").strip() or "noticias"
+
+FACEBOOK_ENABLED = os.getenv("FACEBOOK_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
+FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "").strip()
+FACEBOOK_PAGE_ACCESS_TOKEN = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
+INSTAGRAM_ENABLED = os.getenv("INSTAGRAM_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
+INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+
+META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
 CLEAN_DUPLICATES = os.getenv("CLEAN_DUPLICATES", "false").lower() in ("1", "true", "yes", "sim")
 
@@ -139,7 +162,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.6)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.7)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -404,27 +427,15 @@ def existing(api):
     print(f"Posts do robô já publicados: {bot_count}")
     return blog_urls, source_urls, titles, bot_count
 
-# ============================================================
-# VERIFICAÇÃO DE DUPLICIDADE — APENAS VIA API DO BLOGGER
-# (compara o título da notícia nova com títulos já publicados no SEU blog)
-# ============================================================
-
 def _tech_norm(text):
     text = unicodedata.normalize("NFKD", str(text or ""))
     return re.sub(r"\s+", " ", "".join(c for c in text if not unicodedata.combining(c)).lower()).strip()
 
 def check_blogger_for_duplicate(api, article_title, existing_titles):
-    """
-    Verifica se já existe post no SEU blog com título muito similar.
-    Usa:
-      1. Lista local de títulos já publicados (similaridade >= 0.60)
-      2. Busca via API do Blogger (similaridade >= 0.60)
-    """
     new_words = _compare_normalize(article_title)
     if not new_words:
         return False, ""
 
-    # 1. Comparação contra lista local de títulos do blog
     for et in existing_titles:
         et_words = _compare_normalize(et)
         if not et_words:
@@ -433,7 +444,6 @@ def check_blogger_for_duplicate(api, article_title, existing_titles):
         if sim >= 0.60:
             return True, et
 
-    # 2. Busca via API do Blogger (usa 2 palavras-chave mais longas)
     search_terms = sorted(new_words, key=len, reverse=True)[:2]
     if not search_terms:
         return False, ""
@@ -448,6 +458,92 @@ def check_blogger_for_duplicate(api, article_title, existing_titles):
         print(f"⚠ Busca API: {e}")
 
     return False, ""
+
+# ============================================================
+# DIVULGAÇÃO SOCIAL (Telegram, Facebook, Instagram)
+# ============================================================
+
+def build_promo_url(url):
+    """Adiciona UTMs para rastreamento."""
+    try:
+        parsed = urlparse(url)
+        q = dict(parse_qsl(parsed.query))
+        q.update({"utm_source": PROMO_UTM_SOURCE, "utm_medium": PROMO_UTM_MEDIUM, "utm_campaign": PROMO_UTM_CAMPAIGN})
+        return parsed._replace(query=urlencode(q)).geturl()
+    except Exception:
+        return url
+
+def promote_telegram(title, post_url, summary=""):
+    if not PROMO_ENABLED or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    try:
+        promo_url = build_promo_url(post_url)
+        text = f"📰 <b>{title}</b>\n\n{summary[:300]}\n\n👉 Leia mais: {promo_url}"
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False},
+            timeout=20,
+        )
+        if r.status_code == 200 and r.json().get("ok"):
+            print(f"✓ Telegram: mensagem enviada")
+            return True
+        print(f"⚠ Telegram: falha ({r.status_code}): {r.text[:150]}")
+    except Exception as e:
+        print(f"⚠ Telegram: erro {str(e)[:150]}")
+    return False
+
+def promote_facebook(title, post_url, summary=""):
+    if not FACEBOOK_ENABLED or not FACEBOOK_PAGE_ID or not FACEBOOK_PAGE_ACCESS_TOKEN:
+        return False
+    try:
+        promo_url = build_promo_url(post_url)
+        message = f"📰 {title}\n\n{summary[:300]}\n\n👉 Leia mais: {promo_url}"
+        r = requests.post(
+            f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/feed",
+            data={"message": message, "link": promo_url, "access_token": FACEBOOK_PAGE_ACCESS_TOKEN},
+            timeout=20,
+        )
+        if r.status_code == 200 and "id" in r.json():
+            print(f"✓ Facebook: post publicado")
+            return True
+        print(f"⚠ Facebook: falha ({r.status_code}): {r.text[:150]}")
+    except Exception as e:
+        print(f"⚠ Facebook: erro {str(e)[:150]}")
+    return False
+
+def promote_instagram(title, post_url, image_url, summary=""):
+    if not INSTAGRAM_ENABLED or not INSTAGRAM_USER_ID or not INSTAGRAM_ACCESS_TOKEN:
+        return False
+    if not image_url:
+        print("⚠ Instagram: sem imagem, pulando")
+        return False
+    try:
+        promo_url = build_promo_url(post_url)
+        caption = f"📰 {title}\n\n{summary[:200]}\n\n👉 Leia mais: {promo_url}"
+        # 1. Cria container
+        r1 = requests.post(
+            f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}/media",
+            data={"image_url": image_url, "caption": caption, "access_token": INSTAGRAM_ACCESS_TOKEN},
+            timeout=20,
+        )
+        if r1.status_code != 200 or "id" not in r1.json():
+            print(f"⚠ Instagram: falha ao criar container ({r1.status_code}): {r1.text[:150]}")
+            return False
+        container_id = r1.json()["id"]
+        time.sleep(5)
+        # 2. Publica
+        r2 = requests.post(
+            f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}/media_publish",
+            data={"creation_id": container_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
+            timeout=20,
+        )
+        if r2.status_code == 200 and "id" in r2.json():
+            print(f"✓ Instagram: post publicado")
+            return True
+        print(f"⚠ Instagram: falha ao publicar ({r2.status_code}): {r2.text[:150]}")
+    except Exception as e:
+        print(f"⚠ Instagram: erro {str(e)[:150]}")
+    return False
 
 def gemini(article, client=None):
     global gemini_calls, gemini_quota_hit, _ai_config_logged
@@ -589,6 +685,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 
 def main():
     print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel + Fuxico Gospel")
+    print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'} | Facebook={'ON' if FACEBOOK_ENABLED and FACEBOOK_PAGE_ID else 'OFF'} | Instagram={'ON' if INSTAGRAM_ENABLED and INSTAGRAM_USER_ID else 'OFF'}")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls, existing_titles, posts_count = existing(api)
@@ -622,7 +719,6 @@ def main():
             ignored += 1
             continue
 
-        # ÚNICA verificação de duplicidade: já está no SEU blog?
         is_dup, dup_title = check_blogger_for_duplicate(api, article["title"], existing_titles)
         if is_dup:
             print(f"⚠ Duplicada (já no blog): «{article['title'][:60]}» ≈ «{dup_title[:60]}»")
@@ -639,7 +735,6 @@ def main():
             if gemini_quota_hit: break
             continue
 
-        # Após a IA, verifica novamente se o título gerado já existe no blog
         is_dup2, dup_title2 = check_blogger_for_duplicate(api, generated.get("titulo", ""), existing_titles)
         if is_dup2:
             print(f"⚠ Duplicada pós-IA: «{generated.get('titulo','')[:60]}» ≈ «{dup_title2[:60]}»")
@@ -661,9 +756,17 @@ def main():
             published += 1
             old_source_urls.add(normalized)
             existing_titles.extend([seo["title"], seo["titulo_base"], article["title"]])
-            if response.get("url"):
-                old_blog_urls.add(normalize_url(response["url"]))
+            post_url = response.get("url", "")
+            if post_url:
+                old_blog_urls.add(normalize_url(post_url))
             print(f"✓ Publicada: {seo['title'].strip()}")
+
+            # ===== DIVULGAÇÃO SOCIAL =====
+            if post_url:
+                summary = generated.get("resumo", "")
+                promote_telegram(seo["title"], post_url, summary)
+                promote_facebook(seo["title"], post_url, summary)
+                promote_instagram(seo["title"], post_url, final_image, summary)
         except Exception as exc:
             failed += 1
             print(f"⚠ Blogger: falha ao publicar ({str(exc)[:200]})")
@@ -673,6 +776,6 @@ def main():
     print(f"Ignoradas: {ignored}")
     print(f"Falhas: {failed}")
 
-print("VERSÃO 14.6 ATIVA: 5 Fontes | Scraping HTML + RSS | Anti-Duplicidade APENAS via API do Blogger")
+print("VERSÃO 14.7 ATIVA: 5 Fontes | Scraping HTML + RSS | Divulgação Social (Telegram/Facebook/Instagram)")
 print(f"MAX_AGE_DAYS configurado: {MAX_AGE_DAYS}")
 main()
