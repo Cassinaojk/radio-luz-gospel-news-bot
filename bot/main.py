@@ -36,6 +36,8 @@ def print(*args, **kwargs):
         or message.startswith("⚠ Pulada:")
         or message.startswith("⚠ Duplicada:")
         or message.startswith("⚠ Notícia antiga:")
+        or message.startswith("⚠ Data:")
+        or message.startswith("⚠ Conteúdo:")
         or message.startswith("Erro:")
     )
     if important:
@@ -50,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 13.0 (Filtro de Hoje + Anti-Duplicidade API)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 13.1 (3 Fontes + Filtro de Hoje Flexível + Anti-Duplicidade API)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -109,12 +111,12 @@ GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 80
 
 # ============================================================
-# CORREÇÃO 1: SÓ ACEITA NOTÍCIAS DE HOJE
+# FILTRO DE DATA FLEXÍVEL: aceita hoje e ontem (fuso horário)
 # ============================================================
-MAX_AGE_DAYS = 0 
+MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "1"))
 
-MIN_SOURCE_CHARS = 700
-MIN_SOURCE_PARAGRAPHS = 4
+MIN_SOURCE_CHARS = 500          # era 700 — reduzido para aceitar notas curtas
+MIN_SOURCE_PARAGRAPHS = 3       # era 4 — reduzido
 TIMEOUT = 25
 
 GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -184,7 +186,7 @@ def is_music_related(article=None, generated=None, raw_text=""):
 
 def quick_music_prefilter(article):
     title = _music_norm(article.get("title", ""))
-    head = _music_norm(article.get("text", "")[:400])
+    head = _music_norm(article.get("text", "")[:800])   # era 400
     combined = f"{title} {head}"
 
     if any(t in title for t in MUSIC_STRONG_TERMS):
@@ -194,21 +196,13 @@ def quick_music_prefilter(article):
     support = sum(1 for t in MUSIC_SUPPORT_TERMS if t in combined)
     if strong >= 1 and support >= 1:
         return True, ""
+    if strong >= 2:
+        return True, ""
 
     return False, "sem termos musicais fortes no título/trecho inicial"
 
-
-# ===== Fontes =====
+# ===== Fontes (apenas as 3 solicitadas) =====
 SOURCES = [
-    {
-        "nome": "Fuxico Gospel",
-        "url": "https://www.fuxicogospel.com.br/",
-        "feeds": [
-            "https://www.fuxicogospel.com.br/feed/",
-            "https://www.fuxicogospel.com.br/feed",
-        ],
-        "music_page": False,
-    },
     {
         "nome": "News Gospel",
         "url": "https://www.newsgospel.com.br/",
@@ -241,44 +235,6 @@ SOURCES = [
         "music_page": True,
         "path_prefix": "/musica",
     },
-    {
-        "nome": "Gospel Mais",
-        "url": "https://gospelmais.com/",
-        "feeds": [
-            "https://gospelmais.com/feed/",
-            "https://gospelmais.com/feed",
-            "https://www.gospelmais.com/feed/",
-        ],
-        "music_page": True,
-    },
-    {
-        "nome": "Exibir Gospel",
-        "url": "https://exibirgospel.com.br/",
-        "feeds": [
-            "https://exibirgospel.com.br/feed/",
-            "https://exibirgospel.com.br/feed",
-        ],
-        "music_page": True,
-    },
-    {
-        "nome": "iGospel",
-        "url": "https://www.igospel.org.br/",
-        "feeds": [
-            "https://www.igospel.org.br/feed/",
-            "https://www.igospel.org.br/feed",
-            "https://igospel.org.br/feed/",
-        ],
-        "music_page": True,
-    },
-    {
-        "nome": "NT Gospel",
-        "url": "https://ntgospel.com/",
-        "feeds": [
-            "https://ntgospel.com/feed/",
-            "https://ntgospel.com/feed",
-        ],
-        "music_page": True,
-    },
 ]
 
 BAD_PATHS = (
@@ -303,7 +259,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/13.0)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/13.1)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -484,7 +440,7 @@ def resolve_repo_image_url(relative_path):
     for candidate in candidates:
         try:
             r = requests.get(candidate, stream=True, timeout=12,
-                             headers={"User-Agent": "RadioLuzGospel/13.0"})
+                             headers={"User-Agent": "RadioLuzGospel/13.1"})
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
@@ -538,13 +494,13 @@ def get_article(url):
 
     d = article_date(x)
     if d:
-        # FILTRO RÍGIDO DE DATA
         age = (datetime.now() - d).total_seconds() / 86400
         if age > MAX_AGE_DAYS:
-            print(f"⚠ Notícia antiga (publicada em {d.strftime('%d/%m/%Y')}). Pulando.")
+            print(f"⚠ Notícia antiga (publicada em {d.strftime('%d/%m/%Y')}, {age:.1f} dias). Pulando.")
             return None
+        print(f"✓ Data válida: {d.strftime('%d/%m/%Y %H:%M')} (idade: {age:.2f} dias)")
     else:
-        print("Data não identificada. Aceitando para análise.")
+        print("⚠ Data não identificada. Aceitando para análise.")
 
     img = image_original(x) or ""
 
@@ -557,7 +513,7 @@ def get_article(url):
     text = "\n\n".join(paragraphs)
 
     if len(text) < MIN_SOURCE_CHARS or len(paragraphs) < MIN_SOURCE_PARAGRAPHS:
-        print(f"Conteúdo insuficiente: {len(text)} caracteres; {len(paragraphs)} parágrafos")
+        print(f"⚠ Conteúdo insuficiente: {len(text)} caracteres; {len(paragraphs)} parágrafos")
         return None
 
     link_count = len(box.find_all("a"))
@@ -1040,42 +996,43 @@ def is_duplicate_story(
     return False, ""
 
 # ============================================================
-# CORREÇÃO 2: VERIFICAÇÃO VIA API DO BLOGGER
+# VERIFICAÇÃO VIA API DO BLOGGER
 # ============================================================
 
+def _tech_norm(text):
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
+    return re.sub(r"\s+", " ", text).strip()
+
 def check_blogger_for_duplicate(api, article_title):
-    """
-    Usa a API de busca do Blogger para ver se já existe um post
-    com as palavras-chave principais da notícia.
-    """
     keywords = _compare_normalize(article_title)
     if not keywords:
         return False, ""
-    
+
     search_terms = sorted(list(keywords), key=len, reverse=True)[:2]
     query = " ".join(search_terms)
-    
+
     try:
         response = api.posts().search(
             blogId=BLOGGER_BLOG_ID,
             q=query,
             fetchBodies=False,
-            maxResults=5
+            maxResults=5,
         ).execute()
-        
+
         for post in response.get("items", []):
             post_title = post.get("title", "")
             if _title_similarity(
                 _compare_normalize(article_title),
-                _compare_normalize(post_title)
+                _compare_normalize(post_title),
             ) >= 0.50:
                 return True, post_title
             if any(term in _tech_norm(post_title) for term in search_terms):
                 return True, post_title
-                
+
     except Exception as e:
         print(f"⚠ Busca API: erro ao verificar duplicata: {e}")
-        
+
     return False, ""
 
 # ============================================================
@@ -1846,7 +1803,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     )
 
 def main():
-    print("Fontes: Fuxico + News Gospel + Folha Gospel Música + Guiame Música + Gospel Mais + Exibir Gospel + iGospel + NT Gospel")
+    print("Fontes: News Gospel + Folha Gospel Música + Guiame Música")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
 
@@ -1914,7 +1871,7 @@ def main():
         print(f"⚠ Duplicadas por conteúdo (pré-IA): {pre_duplicates}")
 
     candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
-    print(f"Novas matérias musicais de hoje: {len(candidates)}")
+    print(f"Novas matérias musicais de hoje/ontem: {len(candidates)}")
 
     published = 0
     failed = 0
@@ -1928,9 +1885,6 @@ def main():
             ignored += 1
             continue
 
-        # ============================================================
-        # CORREÇÃO 2: VERIFICAÇÃO VIA API ANTES DA IA
-        # ============================================================
         is_dup_api, dup_title_api = check_blogger_for_duplicate(api, article["title"])
         if is_dup_api:
             print(f"⚠ Duplicada (API): «{article['title'][:60]}» já existe como «{dup_title_api[:60]}» — pulando.")
@@ -2070,6 +2024,6 @@ def main():
     if post_duplicates:
         print(f"⚠ Duplicadas detectadas após IA: {post_duplicates}")
 
-print("VERSÃO 13.0 ATIVA: Filtro de Hoje + Bloqueio via API + Fingerprint | SEO | Vídeos | Spotify | Telegram")
+print("VERSÃO 13.1 ATIVA: 3 Fontes | Filtro Hoje/Ontem | Bloqueio via API | SEO | Vídeos | Spotify | Telegram")
 
 main()
