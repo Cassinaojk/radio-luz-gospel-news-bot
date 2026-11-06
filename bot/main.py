@@ -52,7 +52,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 13.2 (5 Fontes + Filtro de Hoje Flexível + Anti-Duplicidade API)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 13.3 (5 Fontes + Anti-Duplicidade Rígida + Filtro de Hoje Flexível)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -115,8 +115,8 @@ MAX_LINKS_PER_SOURCE = 80
 # ============================================================
 MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "1"))
 
-MIN_SOURCE_CHARS = 500          # era 700 — reduzido para aceitar notas curtas
-MIN_SOURCE_PARAGRAPHS = 3       # era 4 — reduzido
+MIN_SOURCE_CHARS = 500
+MIN_SOURCE_PARAGRAPHS = 3
 TIMEOUT = 25
 
 GEMINI_MODEL_TEXT = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
@@ -186,7 +186,7 @@ def is_music_related(article=None, generated=None, raw_text=""):
 
 def quick_music_prefilter(article):
     title = _music_norm(article.get("title", ""))
-    head = _music_norm(article.get("text", "")[:800])   # era 400
+    head = _music_norm(article.get("text", "")[:800])
     combined = f"{title} {head}"
 
     if any(t in title for t in MUSIC_STRONG_TERMS):
@@ -278,7 +278,7 @@ VIDEO_HOSTS = (
 )
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/13.2)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/13.3)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -459,7 +459,7 @@ def resolve_repo_image_url(relative_path):
     for candidate in candidates:
         try:
             r = requests.get(candidate, stream=True, timeout=12,
-                             headers={"User-Agent": "RadioLuzGospel/13.2"})
+                             headers={"User-Agent": "RadioLuzGospel/13.3"})
             status = r.status_code
             content_type = (r.headers.get("Content-Type") or "").lower()
             r.close()
@@ -900,7 +900,7 @@ def existing(api, show_log=True):
     )
 
 # ============================================================
-# ANTI-DUPLICIDADE
+# ANTI-DUPLICIDADE (RÍGIDA)
 # ============================================================
 
 def is_duplicate_story(
@@ -919,9 +919,9 @@ def is_duplicate_story(
     new_src_title = (article.get("title") or "").strip()
     new_subject = (generated.get("assunto_principal") or "").strip()
 
-    # ----- Camada 0 -----
+    # ----- Camada 0: título original da fonte idêntico -----
     new_src_norm = _normalized_full_string(new_src_title)
-    if new_src_norm and len(new_src_norm) >= 30:
+    if new_src_norm and len(new_src_norm) >= 20:
         for ex_src in existing_source_titles:
             if _normalized_full_string(ex_src) == new_src_norm:
                 return True, "mesma matéria-fonte (título original idêntico)"
@@ -932,7 +932,7 @@ def is_duplicate_story(
     best_score = 0.0
     best_match = ""
 
-    # ----- Camadas 1 e 2 -----
+    # ----- Camadas 1 e 2: similaridade de título (threshold reduzido para 0.40) -----
     for existing_title in existing_titles:
         ex_words = _compare_normalize(existing_title)
         if not ex_words:
@@ -957,10 +957,10 @@ def is_duplicate_story(
             best_score = sim
             best_match = existing_src
 
-    if best_score >= 0.55:
+    if best_score >= 0.40:
         return True, f"título muito similar a post existente ({best_score:.2f}): {best_match[:80]}"
 
-    # ----- Camada 3 -----
+    # ----- Camada 3: mesmo assunto + título relacionado -----
     if new_subject:
         new_subj_words = _compare_normalize(new_subject)
         if new_subj_words:
@@ -969,10 +969,10 @@ def is_duplicate_story(
                 if not ex_subj_words:
                     continue
                 overlap = len(new_subj_words & ex_subj_words) / max(1, len(new_subj_words))
-                if overlap >= 0.70 and best_score >= 0.35:
+                if overlap >= 0.60 and best_score >= 0.30:
                     return True, f"mesmo assunto ({new_subject[:40]}) e título relacionado (score {best_score:.2f})"
 
-    # ----- Camada 4 -----
+    # ----- Camada 4: entidades fortes em comum (1+ já bloqueia) -----
     new_entities = _extract_entities(new_gen_title) + _extract_entities(new_src_title)
     seen_e = set()
     new_entities_dedup = []
@@ -985,10 +985,10 @@ def is_duplicate_story(
         if not ex_ents:
             continue
         strong, weak = _entities_overlap(new_entities_dedup, ex_ents)
-        if strong >= 2:
-            return True, f"{strong} entidades fortes em comum com post existente"
+        if strong >= 1:
+            return True, f"{strong} entidade(s) forte(s) em comum com post existente"
 
-    # ----- Camada 5: fingerprint de conteúdo -----
+    # ----- Camada 5: fingerprint de conteúdo (threshold reduzido para 0.30) -----
     new_content_text = (
         (new_src_title + ". ") * 2
         + " ".join([new_gen_title, new_subject])
@@ -1000,12 +1000,12 @@ def is_duplicate_story(
         if not fp_old:
             continue
         n_entities, ratio = _content_overlap(fp_new, fp_old)
-        if n_entities >= 2:
+        if n_entities >= 1:
             return True, (
-                f"{n_entities} entidades em comum no conteúdo "
+                f"{n_entities} entidade(s) em comum no conteúdo "
                 f"(post antigo: {fp_old.get('title','')[:60]})"
             )
-        if ratio >= 0.40:
+        if ratio >= 0.30:
             return True, (
                 f"conteúdo muito similar a post existente "
                 f"(vocabulário {ratio*100:.0f}% em comum; "
@@ -1015,7 +1015,7 @@ def is_duplicate_story(
     return False, ""
 
 # ============================================================
-# VERIFICAÇÃO VIA API DO BLOGGER
+# VERIFICAÇÃO VIA API DO BLOGGER (RÍGIDA)
 # ============================================================
 
 def _tech_norm(text):
@@ -1024,11 +1024,15 @@ def _tech_norm(text):
     return re.sub(r"\s+", " ", text).strip()
 
 def check_blogger_for_duplicate(api, article_title):
+    """
+    Busca no Blogger por palavras-chave do título.
+    Usa 3 termos mais longos e compara similaridade >= 0.45.
+    """
     keywords = _compare_normalize(article_title)
     if not keywords:
         return False, ""
 
-    search_terms = sorted(list(keywords), key=len, reverse=True)[:2]
+    search_terms = sorted(list(keywords), key=len, reverse=True)[:3]
     query = " ".join(search_terms)
 
     try:
@@ -1036,17 +1040,20 @@ def check_blogger_for_duplicate(api, article_title):
             blogId=BLOGGER_BLOG_ID,
             q=query,
             fetchBodies=False,
-            maxResults=5,
+            maxResults=10,
         ).execute()
 
         for post in response.get("items", []):
             post_title = post.get("title", "")
-            if _title_similarity(
+            sim = _title_similarity(
                 _compare_normalize(article_title),
                 _compare_normalize(post_title),
-            ) >= 0.50:
+            )
+            if sim >= 0.45:
                 return True, post_title
-            if any(term in _tech_norm(post_title) for term in search_terms):
+            # Verificação extra: se TODOS os search_terms estão no título do post
+            post_norm = _tech_norm(post_title)
+            if all(term in post_norm for term in search_terms):
                 return True, post_title
 
     except Exception as e:
@@ -1090,10 +1097,10 @@ def _clean_existing_duplicates(api, posts_list, content_fingerprints):
             n_entities, ratio = _content_overlap(fp_new, fp_old)
             dup = False
             reason = ""
-            if n_entities >= 2:
+            if n_entities >= 1:
                 dup = True
-                reason = f"{n_entities} entidades em comum"
-            elif ratio >= 0.40:
+                reason = f"{n_entities} entidade(s) em comum"
+            elif ratio >= 0.30:
                 dup = True
                 reason = f"vocabulário {ratio*100:.0f}% em comum"
 
@@ -1866,6 +1873,7 @@ def main():
                     print(f"⚠ Pulada (pré-filtro): {article['title'][:70]} — {reason}")
                     continue
 
+                # VERIFICAÇÃO ANTI-DUPLICIDADE ANTES DA IA (RÍGIDA)
                 pre_dup, pre_reason = is_duplicate_story(
                     article,
                     {"titulo": article.get("title", ""), "assunto_principal": ""},
@@ -1904,6 +1912,7 @@ def main():
             ignored += 1
             continue
 
+        # VERIFICAÇÃO VIA API DO BLOGGER (RÍGIDA)
         is_dup_api, dup_title_api = check_blogger_for_duplicate(api, article["title"])
         if is_dup_api:
             print(f"⚠ Duplicada (API): «{article['title'][:60]}» já existe como «{dup_title_api[:60]}» — pulando.")
@@ -1921,6 +1930,7 @@ def main():
                 break
             continue
 
+        # VERIFICAÇÃO ANTI-DUPLICIDADE APÓS A IA (RÍGIDA)
         dup, dup_reason = is_duplicate_story(
             article,
             generated,
@@ -2043,6 +2053,6 @@ def main():
     if post_duplicates:
         print(f"⚠ Duplicadas detectadas após IA: {post_duplicates}")
 
-print("VERSÃO 13.2 ATIVA: 5 Fontes | Filtro Hoje/Ontem | Bloqueio via API | SEO | Vídeos | Spotify | Telegram")
+print("VERSÃO 13.3 ATIVA: 5 Fontes | Anti-Duplicidade Rígida | Filtro Hoje/Ontem | SEO | Vídeos | Spotify | Telegram")
 
 main()
