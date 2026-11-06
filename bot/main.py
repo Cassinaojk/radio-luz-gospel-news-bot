@@ -27,6 +27,11 @@ def print(*args, **kwargs):
         or message.startswith("⚠ Notícia antiga:")
         or message.startswith("⚠ Conteúdo:")
         or message.startswith("⚠ Data:")
+        or message.startswith("MAX_AGE_DAYS")
+        or message.startswith("Links em")
+        or message.startswith("✓ Data OK")
+        or message.startswith("✓ Notícia válida")
+        or message.startswith("IA:")
     )
     if important:
         return _original_print(*args, **kwargs)
@@ -39,7 +44,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.3 (5 Fontes + Scraping HTML + Filtro de Data 4 dias)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.4 (5 Fontes + Scraping HTML + Filtro de Data 4 dias)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -137,7 +142,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.3)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.4)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -349,7 +354,6 @@ def links(source):
                 continue
             if u in seen:
                 continue
-            # Filtro: só aceita links que parecem artigos (path com 2+ níveis)
             path = urlparse(u).path.strip("/")
             if path.count("/") >= 1 and len(path) > 10:
                 seen.add(u)
@@ -804,5 +808,6 @@ def main():
     print(f"Falhas: {failed}")
     if post_dups: print(f"⚠ Duplicadas (pós-IA): {post_dups}")
 
-print("VERSÃO 14.3 ATIVA: 5 Fontes | Scraping HTML + RSS | Filtro de Data 4 dias | Anti-Duplicidade Rígida")
+print("VERSÃO 14.4 ATIVA: 5 Fontes | Scraping HTML + RSS | Filtro de Data 4 dias | Anti-Duplicidade Rígida")
+print(f"MAX_AGE_DAYS configurado: {MAX_AGE_DAYS}")
 main()
