@@ -1,6 +1,7 @@
 import os, re, json, requests, time, random, io, contextlib, unicodedata, warnings
 import builtins
 
+# Log simplificado para o GitHub Actions
 _VERBOSE_LOG = os.getenv("VERBOSE_LOG", "true").lower() in ("1", "true", "yes", "sim")
 _original_print = builtins.print
 
@@ -9,33 +10,17 @@ def print(*args, **kwargs):
         return _original_print(*args, **kwargs)
     message = " ".join(str(a) for a in args).strip()
     important = (
-        message.startswith("RÁDIO LUZ GOSPEL - ROBÔ")
-        or message.startswith("VERSÃO ")
+        message.startswith("RÁDIO LUZ GOSPEL")
+        or message.startswith("VERSÃO")
         or message.startswith("Fontes:")
-        or message.startswith("Posts existentes")
-        or message.startswith("Fontes já registradas")
-        or message.startswith("Fontes encontradas")
-        or message.startswith("Novas matérias")
-        or message.startswith("Puladas:")
         or message == "RESULTADO"
+        or message.startswith("✓")
+        or message.startswith("⚠")
         or message.startswith("Publicações:")
         or message.startswith("Ignoradas:")
         or message.startswith("Falhas:")
-        or message.startswith("✓ Publicada:")
-        or message.startswith("✓ Telegram:")
-        or message.startswith("✓ Instagram:")
-        or message.startswith("⚠ Pulada:")
-        or message.startswith("⚠ Duplicada:")
-        or message.startswith("⚠ Notícia antiga:")
-        or message.startswith("⚠ Conteúdo:")
-        or message.startswith("⚠ Data:")
-        or message.startswith("⚠ Telegram:")
-        or message.startswith("⚠ Instagram:")
         or message.startswith("MAX_AGE_DAYS")
-        or message.startswith("Links em")
-        or message.startswith("✓ Data OK")
-        or message.startswith("✓ Notícia válida")
-        or message.startswith("IA:")
+        or message.startswith("Divulgação:")
     )
     if important:
         return _original_print(*args, **kwargs)
@@ -48,7 +33,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.9 (System User API para Instagram)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.0")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -64,19 +49,13 @@ SEO_TITLE_SUFFIX = os.getenv("SEO_TITLE_SUFFIX", f" | {BLOG_NAME}").strip()
 SEO_DESCRIPTION_MAX = int(os.getenv("SEO_DESCRIPTION_MAX", "160"))
 SEO_KEYWORDS_MAX = int(os.getenv("SEO_KEYWORDS_MAX", "12"))
 
-# ===== Divulgação social =====
+# ===== Divulgação social (Apenas Telegram) =====
 PROMO_ENABLED = os.getenv("PROMO_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 PROMO_UTM_SOURCE = os.getenv("PROMO_UTM_SOURCE", "telegram").strip() or "telegram"
 PROMO_UTM_MEDIUM = os.getenv("PROMO_UTM_MEDIUM", "social").strip() or "social"
 PROMO_UTM_CAMPAIGN = os.getenv("PROMO_UTM_CAMPAIGN", "noticias").strip() or "noticias"
-
-INSTAGRAM_ENABLED = os.getenv("INSTAGRAM_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
-INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
-INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
-
-META_GRAPH_API_VERSION = os.getenv("META_GRAPH_API_VERSION", "v24.0").strip() or "v24.0"
 
 CLEAN_DUPLICATES = os.getenv("CLEAN_DUPLICATES", "false").lower() in ("1", "true", "yes", "sim")
 
@@ -157,7 +136,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.9)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.0)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -367,8 +346,7 @@ def links(source):
                 seen.add(u)
                 out.append(u)
 
-    html_count = len(out) - rss_count
-    print(f"Links em {source['nome']}: {len(out)} (RSS: {rss_count}, HTML: {html_count})")
+    print(f"Links em {source['nome']}: {len(out)}")
     return out[:MAX_LINKS_PER_SOURCE]
 
 def blogger():
@@ -422,10 +400,6 @@ def existing(api):
     print(f"Posts do robô já publicados: {bot_count}")
     return blog_urls, source_urls, titles, bot_count
 
-def _tech_norm(text):
-    text = unicodedata.normalize("NFKD", str(text or ""))
-    return re.sub(r"\s+", " ", "".join(c for c in text if not unicodedata.combining(c)).lower()).strip()
-
 def check_blogger_for_duplicate(api, article_title, existing_titles):
     new_words = _compare_normalize(article_title)
     if not new_words:
@@ -450,16 +424,14 @@ def check_blogger_for_duplicate(api, article_title, existing_titles):
             if _title_similarity(new_words, _compare_normalize(pt)) >= 0.60:
                 return True, pt
     except Exception as e:
-        print(f"⚠ Busca API: {e}")
-
+        pass
     return False, ""
 
 # ============================================================
-# DIVULGAÇÃO SOCIAL (Telegram + Instagram)
+# DIVULGAÇÃO SOCIAL (Apenas Telegram)
 # ============================================================
 
 def build_promo_url(url):
-    """Adiciona UTMs para rastreamento."""
     try:
         parsed = urlparse(url)
         q = dict(parse_qsl(parsed.query))
@@ -487,47 +459,6 @@ def promote_telegram(title, post_url, summary=""):
         print(f"⚠ Telegram: erro {str(e)[:150]}")
     return False
 
-def promote_instagram(title, post_url, image_url, summary=""):
-    if not INSTAGRAM_ENABLED or not INSTAGRAM_USER_ID or not INSTAGRAM_ACCESS_TOKEN:
-        return False
-    if not image_url:
-        print("⚠ Instagram: sem imagem, pulando")
-        return False
-    try:
-        promo_url = build_promo_url(post_url)
-        caption = f"📰 {title}\n\n{summary[:200]}\n\n👉 Leia mais: {promo_url}"
-        
-        # URL alterada para graph.facebook.com para ser compatível com o token System User (EAA...)
-        base_url = f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}"
-        
-        # 1. Cria container
-        r1 = requests.post(
-            f"{base_url}/media",
-            data={"image_url": image_url, "caption": caption, "access_token": INSTAGRAM_ACCESS_TOKEN},
-            timeout=20,
-        )
-        if r1.status_code != 200 or "id" not in r1.json():
-            print(f"⚠ Instagram: falha ao criar container ({r1.status_code}): {r1.text[:200]}")
-            return False
-        container_id = r1.json()["id"]
-        
-        # 2. Aguarda processamento (a Meta recomenda aguardar um pouco)
-        time.sleep(8)
-        
-        # 3. Publica
-        r2 = requests.post(
-            f"{base_url}/media_publish",
-            data={"creation_id": container_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
-            timeout=20,
-        )
-        if r2.status_code == 200 and "id" in r2.json():
-            print(f"✓ Instagram: post publicado")
-            return True
-        print(f"⚠ Instagram: falha ao publicar ({r2.status_code}): {r2.text[:200]}")
-    except Exception as e:
-        print(f"⚠ Instagram: erro {str(e)[:150]}")
-    return False
-
 def gemini(article, client=None):
     global gemini_calls, gemini_quota_hit, _ai_config_logged
     if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
@@ -539,7 +470,6 @@ def gemini(article, client=None):
     if GROQ_API_KEY: providers.append(("groq", GROQ_API_KEY, GROQ_MODEL))
     if MISTRAL_API_KEY: providers.append(("mistral", MISTRAL_API_KEY, MISTRAL_MODEL))
     if not providers:
-        print("⚠ IA: nenhuma chave")
         return None
 
     prompt = f"""Você é jornalista do Rádio Luz Gospel. Escreva uma matéria NOVA, do zero.
@@ -668,8 +598,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 
 def main():
     print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel + Fuxico Gospel")
-    print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'} | Instagram={'ON' if INSTAGRAM_ENABLED and INSTAGRAM_USER_ID else 'OFF'}")
-    print(f"Instagram User ID: {INSTAGRAM_USER_ID}")
+    print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'}")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls, existing_titles, posts_count = existing(api)
@@ -749,7 +678,6 @@ def main():
             if post_url:
                 summary = generated.get("resumo", "")
                 promote_telegram(seo["title"], post_url, summary)
-                promote_instagram(seo["title"], post_url, final_image, summary)
         except Exception as exc:
             failed += 1
             print(f"⚠ Blogger: falha ao publicar ({str(exc)[:200]})")
@@ -759,6 +687,5 @@ def main():
     print(f"Ignoradas: {ignored}")
     print(f"Falhas: {failed}")
 
-print("VERSÃO 14.9 ATIVA: 5 Fontes | Scraping HTML + RSS | Divulgação Social (Telegram/Instagram)")
 print(f"MAX_AGE_DAYS configurado: {MAX_AGE_DAYS}")
 main()
