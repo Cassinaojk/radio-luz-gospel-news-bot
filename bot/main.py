@@ -1,7 +1,6 @@
 import os, re, json, requests, time, random, io, contextlib, unicodedata, warnings
 import builtins
 
-# Log simplificado para o GitHub Actions
 _VERBOSE_LOG = os.getenv("VERBOSE_LOG", "true").lower() in ("1", "true", "yes", "sim")
 _original_print = builtins.print
 
@@ -33,7 +32,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.0")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.1 (Imagem Original Restaurada)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -136,7 +135,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.0)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.1)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -303,6 +302,7 @@ def get_article(url):
         return None
 
     vv = videos(x)
+    # AQUI ESTÁ A CORREÇÃO: A imagem original é adicionada após o segundo parágrafo (index 2)
     inline_imgs = [{"url": img, "after_paragraph": 2, "is_main": True}] if img else []
 
     print(f"✓ Notícia válida: {title[:70]} ({len(text)} chars)")
@@ -577,6 +577,26 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
 <!-- FIM SEO -->"""
     return {"title": title, "titulo_base": titulo_base, "description": description, "keywords": keywords, "labels": labels_final[:10], "canonical": canonical, "html_head": html_head, "assunto": assunto, "categoria_seo": categoria_seo}
 
+def _render_inline_image_html(img_url, alt_text):
+    safe_img = (img_url or "").replace("&", "&amp;").replace('"', "&quot;")
+    safe_alt = (
+        (alt_text or "")
+        .replace("&", "&amp;").replace("<", "&lt;")
+        .replace(">", "&gt;").replace('"', "&quot;")
+    )
+    if not safe_img:
+        return ""
+    return (
+        '<p style="text-align:center;margin:24px 0;">'
+        f'<img src="{safe_img}" '
+        f'alt="{safe_alt}" '
+        f'title="{safe_alt}" '
+        'style="max-width:100%;height:auto;border-radius:12px;'
+        'box-shadow:0 4px 12px rgba(0,0,0,0.10);'
+        'display:block;margin-left:auto;margin-right:auto;">'
+        '</p>'
+    )
+
 def html(article, generated, final_image="", image_origin="", seo=None):
     seo = seo or {}
     titulo = seo.get("titulo_base") or generated.get("titulo", "")
@@ -586,8 +606,41 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     safe_src = article["url"].replace("&", "&amp;").replace('"', "&quot;")
 
     content = [seo.get("html_head", ""), f'<p><strong>{generated["resumo"]}</strong></p>', f'<p><img src="{safe_img}" alt="{safe_titulo}" title="{safe_titulo}" style="max-width:100%;height:auto;border-radius:12px;"></p>']
+    
+    article_paragraphs = []
     for p in re.split(r"\n+", generated["materia"]):
-        if p.strip(): content.append(f"<p>{p.strip()}</p>")
+        if p.strip(): article_paragraphs.append(p.strip())
+
+    inline_images = list(article.get("inline_images") or [])[:1]
+    inline_images.sort(key=lambda item: item.get("after_paragraph", 9999))
+
+    body_parts = []
+    para_idx = 0
+    total_paras = len(article_paragraphs)
+
+    for img_info in inline_images:
+        target = img_info.get("after_paragraph", 9999)
+        try:
+            target = int(target)
+        except Exception:
+            target = 9999
+        if target < 0:
+            target = 0
+        if target > total_paras:
+            target = total_paras
+        while para_idx < target:
+            body_parts.append(f"<p>{article_paragraphs[para_idx]}</p>")
+            para_idx += 1
+        rendered = _render_inline_image_html(img_info.get("url", ""), titulo)
+        if rendered:
+            body_parts.append(rendered)
+
+    while para_idx < total_paras:
+        body_parts.append(f"<p>{article_paragraphs[para_idx]}</p>")
+        para_idx += 1
+
+    content.extend(body_parts)
+
     for v in article["videos"]:
         content.append(f'<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;margin:24px 0;"><iframe src="{v}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen loading="lazy"></iframe></div>')
     content.append('<div style="max-width:600px;margin:2rem auto;text-align:center;"><h3 style="color:#1DB954;">🎵 Top 2026 — Rádio Luz Gospel</h3><iframe style="border-radius:12px;" src="https://open.spotify.com/embed/playlist/14OteRoEl6CVEsTCpYCYyx?utm_source=generator" width="100%" height="380" frameborder="0" allowfullscreen loading="lazy"></iframe></div>')
