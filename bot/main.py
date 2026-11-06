@@ -23,7 +23,6 @@ def print(*args, **kwargs):
         or message.startswith("Falhas:")
         or message.startswith("✓ Publicada:")
         or message.startswith("✓ Telegram:")
-        or message.startswith("✓ Facebook:")
         or message.startswith("✓ Instagram:")
         or message.startswith("⚠ Pulada:")
         or message.startswith("⚠ Duplicada:")
@@ -31,7 +30,6 @@ def print(*args, **kwargs):
         or message.startswith("⚠ Conteúdo:")
         or message.startswith("⚠ Data:")
         or message.startswith("⚠ Telegram:")
-        or message.startswith("⚠ Facebook:")
         or message.startswith("⚠ Instagram:")
         or message.startswith("MAX_AGE_DAYS")
         or message.startswith("Links em")
@@ -45,12 +43,12 @@ def print(*args, **kwargs):
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from datetime import datetime, date, timezone, timedelta
-from urllib.parse import urlparse, urljoin, quote, urlencode
+from urllib.parse import urlparse, urljoin, quote, urlencode, parse_qsl
 from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.7 (5 Fontes + Scraping HTML + Divulgação Social)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.8 (5 Fontes + Scraping HTML + Telegram + Instagram)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -74,9 +72,6 @@ PROMO_UTM_SOURCE = os.getenv("PROMO_UTM_SOURCE", "telegram").strip() or "telegra
 PROMO_UTM_MEDIUM = os.getenv("PROMO_UTM_MEDIUM", "social").strip() or "social"
 PROMO_UTM_CAMPAIGN = os.getenv("PROMO_UTM_CAMPAIGN", "noticias").strip() or "noticias"
 
-FACEBOOK_ENABLED = os.getenv("FACEBOOK_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
-FACEBOOK_PAGE_ID = os.getenv("FACEBOOK_PAGE_ID", "").strip()
-FACEBOOK_PAGE_ACCESS_TOKEN = os.getenv("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
 INSTAGRAM_ENABLED = os.getenv("INSTAGRAM_ENABLED", "false").lower() in ("1", "true", "yes", "sim")
 INSTAGRAM_USER_ID = os.getenv("INSTAGRAM_USER_ID", "").strip()
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
@@ -162,7 +157,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.7)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.8)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -460,7 +455,7 @@ def check_blogger_for_duplicate(api, article_title, existing_titles):
     return False, ""
 
 # ============================================================
-# DIVULGAÇÃO SOCIAL (Telegram, Facebook, Instagram)
+# DIVULGAÇÃO SOCIAL (Telegram + Instagram)
 # ============================================================
 
 def build_promo_url(url):
@@ -492,25 +487,6 @@ def promote_telegram(title, post_url, summary=""):
         print(f"⚠ Telegram: erro {str(e)[:150]}")
     return False
 
-def promote_facebook(title, post_url, summary=""):
-    if not FACEBOOK_ENABLED or not FACEBOOK_PAGE_ID or not FACEBOOK_PAGE_ACCESS_TOKEN:
-        return False
-    try:
-        promo_url = build_promo_url(post_url)
-        message = f"📰 {title}\n\n{summary[:300]}\n\n👉 Leia mais: {promo_url}"
-        r = requests.post(
-            f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{FACEBOOK_PAGE_ID}/feed",
-            data={"message": message, "link": promo_url, "access_token": FACEBOOK_PAGE_ACCESS_TOKEN},
-            timeout=20,
-        )
-        if r.status_code == 200 and "id" in r.json():
-            print(f"✓ Facebook: post publicado")
-            return True
-        print(f"⚠ Facebook: falha ({r.status_code}): {r.text[:150]}")
-    except Exception as e:
-        print(f"⚠ Facebook: erro {str(e)[:150]}")
-    return False
-
 def promote_instagram(title, post_url, image_url, summary=""):
     if not INSTAGRAM_ENABLED or not INSTAGRAM_USER_ID or not INSTAGRAM_ACCESS_TOKEN:
         return False
@@ -520,9 +496,13 @@ def promote_instagram(title, post_url, image_url, summary=""):
     try:
         promo_url = build_promo_url(post_url)
         caption = f"📰 {title}\n\n{summary[:200]}\n\n👉 Leia mais: {promo_url}"
+        
+        # Usa graph.instagram.com para tokens IGAA...
+        base_url = f"https://graph.instagram.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}"
+        
         # 1. Cria container
         r1 = requests.post(
-            f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}/media",
+            f"{base_url}/media",
             data={"image_url": image_url, "caption": caption, "access_token": INSTAGRAM_ACCESS_TOKEN},
             timeout=20,
         )
@@ -530,10 +510,13 @@ def promote_instagram(title, post_url, image_url, summary=""):
             print(f"⚠ Instagram: falha ao criar container ({r1.status_code}): {r1.text[:150]}")
             return False
         container_id = r1.json()["id"]
-        time.sleep(5)
-        # 2. Publica
+        
+        # 2. Aguarda processamento (a Meta recomenda aguardar um pouco)
+        time.sleep(8)
+        
+        # 3. Publica
         r2 = requests.post(
-            f"https://graph.facebook.com/{META_GRAPH_API_VERSION}/{INSTAGRAM_USER_ID}/media_publish",
+            f"{base_url}/media_publish",
             data={"creation_id": container_id, "access_token": INSTAGRAM_ACCESS_TOKEN},
             timeout=20,
         )
@@ -685,7 +668,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 
 def main():
     print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel + Fuxico Gospel")
-    print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'} | Facebook={'ON' if FACEBOOK_ENABLED and FACEBOOK_PAGE_ID else 'OFF'} | Instagram={'ON' if INSTAGRAM_ENABLED and INSTAGRAM_USER_ID else 'OFF'}")
+    print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'} | Instagram={'ON' if INSTAGRAM_ENABLED and INSTAGRAM_USER_ID else 'OFF'}")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls, existing_titles, posts_count = existing(api)
@@ -765,7 +748,6 @@ def main():
             if post_url:
                 summary = generated.get("resumo", "")
                 promote_telegram(seo["title"], post_url, summary)
-                promote_facebook(seo["title"], post_url, summary)
                 promote_instagram(seo["title"], post_url, final_image, summary)
         except Exception as exc:
             failed += 1
@@ -776,6 +758,6 @@ def main():
     print(f"Ignoradas: {ignored}")
     print(f"Falhas: {failed}")
 
-print("VERSÃO 14.7 ATIVA: 5 Fontes | Scraping HTML + RSS | Divulgação Social (Telegram/Facebook/Instagram)")
+print("VERSÃO 14.8 ATIVA: 5 Fontes | Scraping HTML + RSS | Divulgação Social (Telegram/Instagram)")
 print(f"MAX_AGE_DAYS configurado: {MAX_AGE_DAYS}")
 main()
