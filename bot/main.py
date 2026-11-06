@@ -39,7 +39,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.1 (5 Fontes + Anti-Duplicidade Rígida + Filtro de Data Relaxado)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 14.2 (5 Fontes + Anti-Duplicidade Rígida + Filtro de Data 4 dias)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -78,10 +78,11 @@ GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 80
 
-# CORREÇÃO CRÍTICA: aceita hoje, ontem e anteontem (cobre qualquer fuso)
-MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "2"))
+# ============================================================
+# FILTRO DE DATA: aceita notícias de até 4 dias atrás
+# ============================================================
+MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "4"))
 
-# CORREÇÃO CRÍTICA: reduzido para aceitar notas curtas
 MIN_SOURCE_CHARS = 250
 MIN_SOURCE_PARAGRAPHS = 1
 TIMEOUT = 25
@@ -136,7 +137,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.1)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/14.2)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -783,5 +784,5 @@ def main():
     print(f"Falhas: {failed}")
     if post_dups: print(f"⚠ Duplicadas (pós-IA): {post_dups}")
 
-print("VERSÃO 14.1 ATIVA: 5 Fontes | Filtro de Data Relaxado (2 dias) | Anti-Duplicidade Rígida | SEO | Spotify | Telegram")
+print("VERSÃO 14.2 ATIVA: 5 Fontes | Filtro de Data 4 dias | Anti-Duplicidade Rígida | SEO | Spotify | Telegram")
 main()
