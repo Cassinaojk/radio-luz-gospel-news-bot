@@ -20,6 +20,10 @@ def print(*args, **kwargs):
         or message.startswith("Falhas:")
         or message.startswith("MAX_AGE_DAYS")
         or message.startswith("Divulgação:")
+        or message.startswith("🎵")
+        or message.startswith("📰")
+        or message.startswith("--- Fila")
+        or message.startswith("---")
     )
     if important:
         return _original_print(*args, **kwargs)
@@ -32,7 +36,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.1 (Imagem Original Restaurada)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.2 (Prioridade: Lançamentos Musicais)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -135,7 +139,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.1)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.2)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -302,7 +306,6 @@ def get_article(url):
         return None
 
     vv = videos(x)
-    # AQUI ESTÁ A CORREÇÃO: A imagem original é adicionada após o segundo parágrafo (index 2)
     inline_imgs = [{"url": img, "after_paragraph": 2, "is_main": True}] if img else []
 
     print(f"✓ Notícia válida: {title[:70]} ({len(text)} chars)")
@@ -428,6 +431,128 @@ def check_blogger_for_duplicate(api, article_title, existing_titles):
     return False, ""
 
 # ============================================================
+# PRIORIZAÇÃO DE LANÇAMENTOS MUSICAIS
+# ============================================================
+
+_MUSIC_STRONG_KEYWORDS = {
+    # lançamento
+    "lança", "lançou", "lançamento", "lançamentos", "lançam",
+    "lancamento", "lancamentos", "lanca", "lancou", "lancam",
+    "estreia", "estreou", "estreiam",
+    # formatos musicais
+    "single", "singles", "álbum", "album", "álbuns", "albuns",
+    "ep", "eps", "mixtape", "disco", "cd", "vinil",
+    "videoclipe", "clipe", "clipe oficial", "music video",
+    "faixa", "faixas", "track", "setlist",
+    # ações musicais
+    "grava", "gravou", "gravam", "gravação", "gravacao",
+    "compõe", "compôs", "compos", "composição", "composicao",
+    "produz", "produziu", "produção musical", "producao musical",
+    "regrava", "regravou", "regravação", "regravacao",
+    # artistas / música
+    "cantor", "cantora", "cantores", "cantoras",
+    "banda", "bandas", "grupo musical",
+    "música", "musica", "músicas", "musicas", "musical",
+    "som", "canção", "cancao", "canções", "cancoes",
+    "hino", "hinos", "louvor", "louvores", "adoracao", "adoração",
+    "worship", "gospel music",
+    # turnê / shows
+    "turnê", "turne", "turnes", "tour", "shows", "show",
+    "concerto", "concertos", "apresentação", "apresentacao",
+    "festival", "festivais",
+    # plataformas
+    "spotify", "youtube music", "deezer", "apple music",
+    "streaming", "playlist",
+    # gravadoras
+    "gravadora", "selo", "selo musical",
+}
+
+_MUSIC_WEAK_KEYWORDS = {
+    "artista", "artistas", "voz", "vocal", "vozes",
+    "instrumento", "instrumentos", "melodia", "harmonia",
+    "arranjo", "arranjos", "compositor", "compositora",
+    "letra", "letras", "refrão", "refrao",
+    "gênero musical", "genero musical", "estilo musical",
+    "clássico", "classico", "hits", "hit",
+    "billboard", "grammy", "latin grammy", "latim grammy",
+    "rádio", "radio", "rádios", "radios",
+}
+
+_MUSIC_NEGATIVE_HINTS = {
+    "livro", "livros", "biografia", "autobiografia",
+    "filme", "filmes", "série", "serie", "documentário", "documentario",
+    "podcast", "podcasts", "entrevista", "entrevistas",
+    "processo", "polêmica", "polemica", "acusação", "acusacao",
+    "morte", "morre", "morreu", "faleceu", "óbito", "obito",
+    "doença", "doenca", "hospital", "internado",
+    "política", "politica", "eleição", "eleicao", "governo",
+    "escândalo", "escandalo", "crime", "prisão", "prisao",
+    "casamento", "divórcio", "divorcio", "namoro", "noivado",
+    "aniversário", "aniversario", "idade",
+}
+
+
+def _strip_accents(text):
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    return "".join(c for c in text if not unicodedata.combining(c)).lower()
+
+
+def _score_music_release(article):
+    """
+    Retorna um score de 0 a 100 indicando a probabilidade de ser
+    um lançamento musical. Quanto maior, mais prioritário.
+
+    Regras:
+    - 60+  = lançamento musical forte (prioridade máxima)
+    - 30-59 = provavelmente musical (prioridade média)
+    - < 30 = não é lançamento musical (prioridade baixa)
+    """
+    titulo = _strip_accents(article.get("title") or "")
+    texto = _strip_accents((article.get("text") or "")[:4000])
+    bruto = f"{titulo} {texto}"
+
+    score = 0
+
+    # ---- TÍTULO tem peso DOBRADO (sinal mais forte) ----
+    strong_in_title = sum(1 for kw in _MUSIC_STRONG_KEYWORDS
+                          if re.search(r'\b' + re.escape(_strip_accents(kw)) + r'\b', titulo))
+    weak_in_title = sum(1 for kw in _MUSIC_WEAK_KEYWORDS
+                        if re.search(r'\b' + re.escape(_strip_accents(kw)) + r'\b', titulo))
+
+    score += strong_in_title * 25
+    score += weak_in_title * 8
+
+    # ---- CORPO do texto ----
+    strong_in_body = sum(1 for kw in _MUSIC_STRONG_KEYWORDS if _strip_accents(kw) in bruto)
+    weak_in_body = sum(1 for kw in _MUSIC_WEAK_KEYWORDS if _strip_accents(kw) in bruto)
+
+    score += min(strong_in_body * 5, 30)   # teto de 30 no corpo
+    score += min(weak_in_body * 2, 10)
+
+    # ---- BÔNUS: título começa com verbo de lançamento ----
+    if re.match(r'^(lanca|lancou|lancam|estreia|estreou|grava|gravou|'
+                r'artista|cantor|cantora|banda|grupo|dupla)\b', titulo):
+        score += 15
+
+    # ---- BÔNUS: formato explícito de lançamento no título ----
+    if re.search(r'\b(single|album|ep|videoclipe|clipe|'
+                 r'faixa|track|mixtape)\b', titulo):
+        score += 20
+
+    # ---- PENALIDADE: parece ser de outra categoria ----
+    negative_hits = sum(1 for neg in _MUSIC_NEGATIVE_HINTS
+                        if re.search(r'\b' + re.escape(_strip_accents(neg)) + r'\b', titulo))
+    score -= negative_hits * 20
+
+    return max(0, min(score, 100))
+
+
+def _is_music_release(article, threshold=60):
+    """Retorna True se a matéria for considerada um lançamento musical."""
+    return _score_music_release(article) >= threshold
+
+
+# ============================================================
 # DIVULGAÇÃO SOCIAL (Apenas Telegram)
 # ============================================================
 
@@ -472,9 +597,18 @@ def gemini(article, client=None):
     if not providers:
         return None
 
+    music_score = article.get("_music_score", _score_music_release(article))
+    music_hint = ""
+    if music_score >= 60:
+        music_hint = "⚠ ESTA MATÉRIA É UM LANÇAMENTO MUSICAL. Destaque nome do artista, nome da música/álbum, data, plataformas e gravadora.\n\n"
+
     prompt = f"""Você é jornalista do Rádio Luz Gospel. Escreva uma matéria NOVA, do zero.
 Use SOMENTE os fatos do texto-fonte. Não invente.
 Crie título, resumo e matéria em português do Brasil (700-1200 palavras).
+
+{movimento_musical_placeholder if False else music_hint}FOCO EDITORIAL: dê destaque a LANÇAMENTOS MUSICAIS (singles, álbuns, EPs,
+videoclipes, turnês, shows) quando a fonte tratar disso. Cite nome do artista,
+nome da música/álbum, data de lançamento, plataformas e gravadora quando houver.
 
 CRITÉRIO DE PUBLICAÇÃO: marque publicar=true para QUALQUER notícia gospel/cristã/evangélica.
 Marque publicar=false SOMENTE se for COMPLETAMENTE alheia ao universo gospel.
@@ -606,7 +740,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     safe_src = article["url"].replace("&", "&amp;").replace('"', "&quot;")
 
     content = [seo.get("html_head", ""), f'<p><strong>{generated["resumo"]}</strong></p>', f'<p><img src="{safe_img}" alt="{safe_titulo}" title="{safe_titulo}" style="max-width:100%;height:auto;border-radius:12px;"></p>']
-    
+
     article_paragraphs = []
     for p in re.split(r"\n+", generated["materia"]):
         if p.strip(): article_paragraphs.append(p.strip())
@@ -674,8 +808,31 @@ def main():
     print(f"Fontes encontradas: " + " | ".join(f"{n}: {c}" for n, c in source_counts.items()))
     print(f"Puladas: {prefiltered}")
 
-    candidates.sort(key=lambda a: a["date"] or datetime.min, reverse=True)
-    print(f"Novas matérias aceitas: {len(candidates)}")
+    # ============================================================
+    # PRIORIZAÇÃO: LANÇAMENTOS MUSICAIS PRIMEIRO
+    # ============================================================
+    for a in candidates:
+        a["_music_score"] = _score_music_release(a)
+        a["_is_music"] = a["_music_score"] >= 60
+
+    candidates.sort(
+        key=lambda a: (
+            0 if a["_is_music"] else 1,                                     # musicais primeiro
+            -a["_music_score"],                                             # maior score primeiro
+            -(a["date"] or datetime.min).timestamp() if a["date"] else 0,   # depois mais recente
+        )
+    )
+
+    music_count = sum(1 for a in candidates if a["_is_music"])
+    print(f"Novas matérias aceitas: {len(candidates)} "
+          f"(🎵 lançamentos musicais: {music_count} | 📰 outras: {len(candidates) - music_count})")
+
+    if candidates:
+        print("--- Fila de prioridade (top 5) ---")
+        for i, a in enumerate(candidates[:5], 1):
+            tag = "🎵 MUSICAL" if a["_is_music"] else "📰 outra  "
+            print(f"  {i}. [{tag} | score={a['_music_score']:3d}] {a['title'][:70]}")
+        print("----------------------------------")
 
     published = failed = ignored = 0
     while candidates and published < MAX_POSTS_PER_RUN:
@@ -694,6 +851,9 @@ def main():
         if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
             print("⚠ Limite de IA atingido")
             break
+
+        if article.get("_is_music"):
+            print(f"🎵 Prioridade musical (score {article['_music_score']}): {article['title'][:70]}")
 
         generated = gemini(article, gemini_client)
         if not generated:
@@ -727,7 +887,6 @@ def main():
                 old_blog_urls.add(normalize_url(post_url))
             print(f"✓ Publicada: {seo['title'].strip()}")
 
-            # ===== DIVULGAÇÃO SOCIAL =====
             if post_url:
                 summary = generated.get("resumo", "")
                 promote_telegram(seo["title"], post_url, summary)
