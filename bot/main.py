@@ -24,7 +24,6 @@ def print(*args, **kwargs):
         or message.startswith("📰")
         or message.startswith("--- Fila")
         or message.startswith("---")
-        or message.startswith("Limpeza")
     )
     if important:
         return _original_print(*args, **kwargs)
@@ -37,7 +36,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.3 (Autoral + Prioridade Musical)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.2 (Prioridade: Lançamentos Musicais + Autoral)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -140,7 +139,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.3)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.2)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -334,6 +333,8 @@ def links(source):
             if u and not bad_url(u) and host_matches(u) and u not in seen:
                 seen.add(u)
                 out.append(u)
+
+    rss_count = len(out)
 
     x = soup(source["url"])
     if x:
@@ -541,10 +542,10 @@ _SOURCE_VEHICLES = [
     "iGospel", "igospel", "igospel.org.br",
     "UAU Gospel", "uaugospel", "uaugospel.com.br",
     "Gospel Prime", "gospelprime", "gospelprime.com.br",
+    "Super Gospel", "supergospel",
     "Portal do Trono", "portaldotrono",
-    "Comunhão", "comunhao.com.br",
     "Gospel Mais", "gospelmais",
-    "Folha Gospel", "Super Gospel", "supergospel",
+    "Comunhão", "comunhao.com.br",
 ]
 
 _SOURCE_ATTRIBUTION_PATTERNS = [
@@ -560,20 +561,423 @@ _SOURCE_ATTRIBUTION_PATTERNS = [
     r"publicad[oa]\s+originalmente[^.!\n]{0,120}[.!]?",
     r"com\s+informa[çc][õo]es\s+(?:de|do|da)\s+[^.!\n]{1,120}[.!]?",
     r"\((?:foto|imagem|divulga[çc][ãa]o)\s*:[^)]{0,120}\)",
-    r"\(?\s*cr[eé]ditos?\s*:[^)\n]{0,120}\)?",
 ]
 
 
 def _clean_source_mentions(text):
     if not text:
         return text
-
     original = text
-
     for pattern in _SOURCE_ATTRIBUTION_PATTERNS:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
-
     for vehicle in _SOURCE_VEHICLES:
         v = re.escape(vehicle)
         text = re.sub(
-            r"\b(?:o|a|os|as|do|da|dos|das
+            r"\b(?:o|a|os|as|do|da|dos|das|no|na|nos|nas|pelo|pela|pelos|pelas)?\s*" + v + r"\b",
+            "", text, flags=re.IGNORECASE,
+        )
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"\s+([.,;:!?])", r"\1", text)
+    text = re.sub(r"\.\s*\.", ".", text)
+    text = re.sub(r"^\s+", "", text)
+    text = re.sub(r"\s+$", "", text)
+    lines = []
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s:
+            lines.append("")
+            continue
+        if re.fullmatch(r"[\.\-–—•\s]+", s):
+            continue
+        lines.append(s)
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if text != original:
+        removed = len(original) - len(text)
+        if removed > 30:
+            print(f"✓ Limpeza de fonte: -{removed} chars")
+    return text
+
+
+def _clean_titulo_resumo(titulo, resumo):
+    titulo = _clean_source_mentions(titulo)
+    resumo = _clean_source_mentions(resumo)
+    titulo = re.sub(r"https?://\S+", "", titulo)
+    titulo = re.sub(r"\S+@\S+\.\S+", "", titulo)
+    titulo = re.sub(r"\s{2,}", " ", titulo).strip(" -–—|:.,")
+    return titulo, resumo
+
+
+# ============================================================
+# DIVULGAÇÃO SOCIAL (Apenas Telegram)
+# ============================================================
+
+def build_promo_url(url):
+    try:
+        parsed = urlparse(url)
+        q = dict(parse_qsl(parsed.query))
+        q.update({"utm_source": PROMO_UTM_SOURCE, "utm_medium": PROMO_UTM_MEDIUM, "utm_campaign": PROMO_UTM_CAMPAIGN})
+        return parsed._replace(query=urlencode(q)).geturl()
+    except Exception:
+        return url
+
+def promote_telegram(title, post_url, summary=""):
+    if not PROMO_ENABLED or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    try:
+        promo_url = build_promo_url(post_url)
+        text = f"📰 <b>{title}</b>\n\n{summary[:300]}\n\n👉 Leia mais: {promo_url}"
+        r = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            json={"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": False},
+            timeout=20,
+        )
+        if r.status_code == 200 and r.json().get("ok"):
+            print(f"✓ Telegram: mensagem enviada")
+            return True
+        print(f"⚠ Telegram: falha ({r.status_code}): {r.text[:150]}")
+    except Exception as e:
+        print(f"⚠ Telegram: erro {str(e)[:150]}")
+    return False
+
+def gemini(article, client=None):
+    global gemini_calls, gemini_quota_hit, _ai_config_logged
+    if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
+        print("⚠ IA: limite atingido")
+        return None
+    providers = []
+    if GEMINI_API_KEY: providers.append(("gemini", GEMINI_API_KEY, GEMINI_MODEL_TEXT))
+    if GEMINI_API_KEY_2: providers.append(("gemini-2", GEMINI_API_KEY_2, GEMINI_FALLBACK_MODEL))
+    if GROQ_API_KEY: providers.append(("groq", GROQ_API_KEY, GROQ_MODEL))
+    if MISTRAL_API_KEY: providers.append(("mistral", MISTRAL_API_KEY, MISTRAL_MODEL))
+    if not providers:
+        return None
+
+    music_score = article.get("_music_score", _score_music_release(article))
+    music_hint = ""
+    if music_score >= 60:
+        music_hint = "⚠ ESTA MATÉRIA É UM LANÇAMENTO MUSICAL. Destaque nome do artista, nome da música/álbum, data, plataformas e gravadora.\n\n"
+
+    prompt = f"""Você é jornalista do Rádio Luz Gospel. Escreva uma matéria NOVA, do zero.
+Use SOMENTE os fatos do texto-fonte. Não invente.
+
+REGRAS ABSOLUTAS (não negocie):
+1. NUNCA mencione o nome do veículo de origem, site, portal, jornal, blog, revista,
+   coluna, agência ou programa de onde a informação foi obtida.
+2. NUNCA escreva "segundo o X", "conforme o X", "de acordo com o X",
+   "como informou o X", "fonte: X", "via X", "créditos: X",
+   "com informações de X", "publicado originalmente em X".
+3. NUNCA inclua e-mails de contato, URLs, links ou frases do tipo
+   "a reportagem foi baseada em…", "caso haja correção…",
+   "a redação pode ser contatada…", "leia mais em…", "continue lendo em…".
+4. NUNCA copie frases literais do texto-fonte — reescreva com suas palavras.
+5. Escreva como se o Rádio Luz Gospel tivesse apurado a notícia diretamente,
+   com redação própria e autoral.
+6. Se a fonte citar nomes de pessoas, igrejas, artistas ou eventos, mantenha-os
+   (são fatos), mas sem atribuir a um "veículo".
+
+Crie título, resumo e matéria em português do Brasil (700-1200 palavras).
+
+{movimento_musical_placeholder if False else music_hint}FOCO EDITORIAL: dê destaque a LANÇAMENTOS MUSICAIS (singles, álbuns, EPs,
+videoclipes, turnês, shows) quando a fonte tratar disso. Cite nome do artista,
+nome da música/álbum, data de lançamento, plataformas e gravadora quando houver.
+
+CRITÉRIO DE PUBLICAÇÃO: marque publicar=true para QUALQUER notícia gospel/cristã/evangélica.
+Marque publicar=false SOMENTE se for COMPLETAMENTE alheia ao universo gospel.
+
+FORMATO JSON:
+{{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"...","palavras_chave":["..."],"categoria_seo":"..."}}
+
+TÍTULO ORIGINAL (referência interna, NÃO cite): {article['title']}
+TEXTO-FONTE (referência interna, NÃO cite nem copie):
+{article['text']}
+"""
+    exhausted = set()
+    for provider, api_key, model in providers:
+        if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN: break
+        if provider in exhausted: continue
+        try:
+            print(f"IA: {provider}/{model}...")
+            if provider.startswith("gemini"):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    resp = genai.Client(api_key=api_key).models.generate_content(model=model, contents=prompt, config={"response_mime_type": "application/json"})
+                raw = (getattr(resp, "text", None) or "").strip()
+            else:
+                endpoint = {"groq": "https://api.groq.com/openai/v1/chat/completions", "mistral": "https://api.mistral.ai/v1/chat/completions"}[provider]
+                r = requests.post(endpoint, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 5000, "response_format": {"type": "json_object"}}, timeout=AI_PROVIDER_TIMEOUT)
+                raw = r.json()["choices"][0]["message"]["content"].strip()
+            gemini_calls += 1
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
+            data = json.loads(raw)
+            if data.get("publicar") is False: continue
+            titulo = str(data.get("titulo", "")).strip()
+            resumo = str(data.get("resumo", "")).strip()
+            materia = str(data.get("materia", "")).strip()
+
+            # ===== LIMPEZA DE MENÇÕES À FONTE =====
+            titulo, resumo = _clean_titulo_resumo(titulo, resumo)
+            materia = _clean_source_mentions(materia)
+            # ======================================
+
+            if not titulo or not resumo or len(materia) < 700: continue
+            print(f"✓ IA: matéria aprovada ({provider})")
+            return {"publicar": True, "titulo": titulo, "resumo": resumo, "materia": materia, "assunto_principal": str(data.get("assunto_principal", "")).strip(), "palavras_chave": data.get("palavras_chave", [])[:SEO_KEYWORDS_MAX], "categoria_seo": str(data.get("categoria_seo", "")).strip()}
+        except Exception as exc:
+            if any(x in str(exc).upper() for x in ("429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE LIMIT")):
+                exhausted.add(provider)
+                print(f"⚠ {provider}: quota")
+            else:
+                print(f"⚠ {provider}: {str(exc)[:150]}")
+    return None
+
+def build_seo_payload(article, generated, final_image="", image_origin=""):
+    titulo_base = str(generated.get("titulo", "")).strip()
+    resumo = str(generated.get("resumo", "")).strip()
+    materia = str(generated.get("materia", "")).strip()
+    assunto = str(generated.get("assunto_principal", "")).strip()
+    categoria_seo = str(generated.get("categoria_seo", "")).strip()
+    palavras = list(generated.get("palavras_chave", []) or [])
+
+    title = f"{titulo_base}{SEO_TITLE_SUFFIX}" if SEO_TITLE_SUFFIX and not titulo_base.lower().endswith(SEO_TITLE_SUFFIX.lower()) else titulo_base
+    description = (resumo or BeautifulSoup(materia, "html.parser").get_text(" ", strip=True)[:SEO_DESCRIPTION_MAX])[:SEO_DESCRIPTION_MAX]
+
+    kw = []
+    if assunto: kw.append(assunto)
+    if categoria_seo: kw.append(categoria_seo)
+    kw.extend(str(p).strip() for p in palavras if str(p).strip())
+    for fb in ("música gospel", "gospel", "notícias gospel", BLOG_NAME):
+        if fb.lower() not in {k.lower() for k in kw}: kw.append(fb)
+    keywords = ", ".join(kw[:SEO_KEYWORDS_MAX])
+
+    labels = ["Notícias", "Rádio Luz Gospel"]
+    if categoria_seo: labels.append(re.sub(r"\s+", " ", categoria_seo).strip())
+    if assunto and len(assunto) <= 40: labels.append(re.sub(r"\s+", " ", assunto).strip())
+    if article.get("date"): labels.append(str(article["date"].year))
+    seen, labels_final = set(), []
+    for l in labels:
+        if l and l.lower() not in seen:
+            seen.add(l.lower()); labels_final.append(l)
+
+    image_url = final_image or article.get("image", "")
+    canonical = article.get("url", "")
+    published = (article.get("date") or datetime.now()).isoformat()
+    date_modified = datetime.now().isoformat()
+
+    schema = {"@context": "https://schema.org", "@type": "NewsArticle", "mainEntityOfPage": {"@type": "WebPage", "@id": canonical}, "headline": titulo_base[:110], "description": description, "image": [image_url] if image_url else [], "datePublished": published, "dateModified": date_modified, "author": {"@type": "Organization", "name": BLOG_NAME, "url": BLOG_HOME_URL}, "publisher": {"@type": "Organization", "name": BLOG_NAME, "url": BLOG_HOME_URL, "logo": {"@type": "ImageObject", "url": image_url or f"{BLOG_HOME_URL}/favicon.ico"}}, "articleSection": categoria_seo or "Notícias Gospel", "keywords": keywords, "inLanguage": "pt-BR", "isAccessibleForFree": True, "url": canonical}
+    breadcrumb = {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [{"@type": "ListItem", "position": 1, "name": "Início", "item": BLOG_HOME_URL}, {"@type": "ListItem", "position": 2, "name": "Notícias", "item": f"{BLOG_HOME_URL}/search/label/Not%C3%ADcias"}, {"@type": "ListItem", "position": 3, "name": titulo_base[:80], "item": canonical}]}
+
+    safe_title = title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    safe_desc = description.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    safe_kw = keywords.replace("&", "&amp;").replace('"', "&quot;")
+    safe_canonical = canonical.replace("&", "&amp;").replace('"', "&quot;")
+    safe_image = (image_url or "").replace("&", "&amp;").replace('"', "&quot;")
+
+    html_head = f"""<!-- SEO -->
+<title>{safe_title}</title>
+<meta name="description" content="{safe_desc}">
+<meta name="keywords" content="{safe_kw}">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="{safe_canonical}">
+<meta property="og:type" content="article">
+<meta property="og:title" content="{safe_title}">
+<meta property="og:description" content="{safe_desc}">
+<meta property="og:url" content="{safe_canonical}">
+<meta property="og:image" content="{safe_image}">
+<meta property="article:published_time" content="{published}">
+<meta property="article:section" content="{schema['articleSection']}">
+<script type="application/ld+json">{json.dumps(schema, ensure_ascii=False)}</script>
+<script type="application/ld+json">{json.dumps(breadcrumb, ensure_ascii=False)}</script>
+<!-- FIM SEO -->"""
+    return {"title": title, "titulo_base": titulo_base, "description": description, "keywords": keywords, "labels": labels_final[:10], "canonical": canonical, "html_head": html_head, "assunto": assunto, "categoria_seo": categoria_seo}
+
+def _render_inline_image_html(img_url, alt_text):
+    safe_img = (img_url or "").replace("&", "&amp;").replace('"', "&quot;")
+    safe_alt = (
+        (alt_text or "")
+        .replace("&", "&amp;").replace("<", "&lt;")
+        .replace(">", "&gt;").replace('"', "&quot;")
+    )
+    if not safe_img:
+        return ""
+    return (
+        '<p style="text-align:center;margin:24px 0;">'
+        f'<img src="{safe_img}" '
+        f'alt="{safe_alt}" '
+        f'title="{safe_alt}" '
+        'style="max-width:100%;height:auto;border-radius:12px;'
+        'box-shadow:0 4px 12px rgba(0,0,0,0.10);'
+        'display:block;margin-left:auto;margin-right:auto;">'
+        '</p>'
+    )
+
+def html(article, generated, final_image="", image_origin="", seo=None):
+    seo = seo or {}
+    titulo = seo.get("titulo_base") or generated.get("titulo", "")
+    safe_titulo = titulo.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    img = final_image or article["image"]
+    safe_img = img.replace("&", "&amp;").replace('"', "&quot;")
+    safe_src = article["url"].replace("&", "&amp;").replace('"', "&quot;")
+
+    content = [seo.get("html_head", ""), f'<p><strong>{generated["resumo"]}</strong></p>', f'<p><img src="{safe_img}" alt="{safe_titulo}" title="{safe_titulo}" style="max-width:100%;height:auto;border-radius:12px;"></p>']
+
+    article_paragraphs = []
+    for p in re.split(r"\n+", generated["materia"]):
+        if p.strip(): article_paragraphs.append(p.strip())
+
+    inline_images = list(article.get("inline_images") or [])[:1]
+    inline_images.sort(key=lambda item: item.get("after_paragraph", 9999))
+
+    body_parts = []
+    para_idx = 0
+    total_paras = len(article_paragraphs)
+
+    for img_info in inline_images:
+        target = img_info.get("after_paragraph", 9999)
+        try:
+            target = int(target)
+        except Exception:
+            target = 9999
+        if target < 0:
+            target = 0
+        if target > total_paras:
+            target = total_paras
+        while para_idx < target:
+            body_parts.append(f"<p>{article_paragraphs[para_idx]}</p>")
+            para_idx += 1
+        rendered = _render_inline_image_html(img_info.get("url", ""), titulo)
+        if rendered:
+            body_parts.append(rendered)
+
+    while para_idx < total_paras:
+        body_parts.append(f"<p>{article_paragraphs[para_idx]}</p>")
+        para_idx += 1
+
+    content.extend(body_parts)
+
+    for v in article["videos"]:
+        content.append(f'<div style="position:relative;padding-bottom:56.25%;height:0;overflow:hidden;border-radius:12px;margin:24px 0;"><iframe src="{v}" style="position:absolute;top:0;left:0;width:100%;height:100%;border:0;" allowfullscreen loading="lazy"></iframe></div>')
+    content.append('<div style="max-width:600px;margin:2rem auto;text-align:center;"><h3 style="color:#1DB954;">🎵 Top 2026 — Rádio Luz Gospel</h3><iframe style="border-radius:12px;" src="https://open.spotify.com/embed/playlist/14OteRoEl6CVEsTCpYCYyx?utm_source=generator" width="100%" height="380" frameborder="0" allowfullscreen loading="lazy"></iframe></div>')
+    content.append(f'<div style="margin:24px 0;padding:18px;border:1px solid #ddd;border-radius:12px;text-align:center;"><p><strong>📲 Receba as próximas notícias no Telegram</strong></p><p><a href="https://t.me/radioluzgospelnoticias" target="_blank">👉 ENTRAR NO CANAL</a></p></div>')
+
+    source_marker = f"<!-- RADIO_LUZ_GOSPEL_SOURCE_URL: {safe_src} -->"
+    return "\n".join(content) + "\n" + source_marker
+
+def main():
+    print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel + Fuxico Gospel")
+    print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'}")
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    api = blogger()
+    old_blog_urls, old_source_urls, existing_titles, posts_count = existing(api)
+
+    candidates, candidate_urls, source_counts, prefiltered = [], set(), {}, 0
+    for source in SOURCES:
+        source_links = links(source)
+        source_counts[source["nome"]] = len(source_links)
+        for url in source_links:
+            normalized = normalize_url(url)
+            if normalized in candidate_urls or normalized in old_blog_urls or normalized in old_source_urls:
+                continue
+            article = get_article(normalized)
+            if article:
+                candidate_urls.add(normalized)
+                candidates.append(article)
+            else:
+                prefiltered += 1
+
+    print(f"Fontes encontradas: " + " | ".join(f"{n}: {c}" for n, c in source_counts.items()))
+    print(f"Puladas: {prefiltered}")
+
+    # ============================================================
+    # PRIORIZAÇÃO: LANÇAMENTOS MUSICAIS PRIMEIRO
+    # ============================================================
+    for a in candidates:
+        a["_music_score"] = _score_music_release(a)
+        a["_is_music"] = a["_music_score"] >= 60
+
+    candidates.sort(
+        key=lambda a: (
+            0 if a["_is_music"] else 1,
+            -a["_music_score"],
+            -(a["date"] or datetime.min).timestamp() if a["date"] else 0,
+        )
+    )
+
+    music_count = sum(1 for a in candidates if a["_is_music"])
+    print(f"Novas matérias aceitas: {len(candidates)} "
+          f"(🎵 lançamentos musicais: {music_count} | 📰 outras: {len(candidates) - music_count})")
+
+    if candidates:
+        print("--- Fila de prioridade (top 5) ---")
+        for i, a in enumerate(candidates[:5], 1):
+            tag = "🎵 MUSICAL" if a["_is_music"] else "📰 outra  "
+            print(f"  {i}. [{tag} | score={a['_music_score']:3d}] {a['title'][:70]}")
+        print("----------------------------------")
+
+    published = failed = ignored = 0
+    while candidates and published < MAX_POSTS_PER_RUN:
+        article = candidates.pop(0)
+        normalized = normalize_url(article["url"])
+        if normalized in old_source_urls:
+            ignored += 1
+            continue
+
+        is_dup, dup_title = check_blogger_for_duplicate(api, article["title"], existing_titles)
+        if is_dup:
+            print(f"⚠ Duplicada (já no blog): «{article['title'][:60]}» ≈ «{dup_title[:60]}»")
+            ignored += 1
+            continue
+
+        if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
+            print("⚠ Limite de IA atingido")
+            break
+
+        if article.get("_is_music"):
+            print(f"🎵 Prioridade musical (score {article['_music_score']}): {article['title'][:70]}")
+
+        generated = gemini(article, gemini_client)
+        if not generated:
+            ignored += 1
+            if gemini_quota_hit: break
+            continue
+
+        is_dup2, dup_title2 = check_blogger_for_duplicate(api, generated.get("titulo", ""), existing_titles)
+        if is_dup2:
+            print(f"⚠ Duplicada pós-IA: «{generated.get('titulo','')[:60]}» ≈ «{dup_title2[:60]}»")
+            ignored += 1
+            continue
+
+        final_image, chosen_file = pick_next_image_url(posts_count + published)
+        if not final_image:
+            print("⚠ Imagem não encontrada")
+            ignored += 1
+            continue
+        image_origin = f"Sequência: {chosen_file}"
+
+        seo = build_seo_payload(article, generated, final_image, image_origin)
+        print(f"✓ SEO: {seo['title'][:90]}")
+
+        try:
+            response = api.posts().insert(blogId=BLOGGER_BLOG_ID, body={"title": seo["title"].strip(), "content": html(article, generated, final_image, image_origin, seo), "labels": seo["labels"]}, isDraft=False).execute()
+            published += 1
+            old_source_urls.add(normalized)
+            existing_titles.extend([seo["title"], seo["titulo_base"], article["title"]])
+            post_url = response.get("url", "")
+            if post_url:
+                old_blog_urls.add(normalize_url(post_url))
+            print(f"✓ Publicada: {seo['title'].strip()}")
+
+            if post_url:
+                summary = generated.get("resumo", "")
+                promote_telegram(seo["title"], post_url, summary)
+        except Exception as exc:
+            failed += 1
+            print(f"⚠ Blogger: falha ao publicar ({str(exc)[:200]})")
+
+    print("RESULTADO")
+    print(f"Publicações: {published}")
+    print(f"Ignoradas: {ignored}")
+    print(f"Falhas: {failed}")
+
+print(f"MAX_AGE_DAYS configurado: {MAX_AGE_DAYS}")
+main()
