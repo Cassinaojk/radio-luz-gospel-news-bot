@@ -120,11 +120,6 @@ SOURCES = [
         "url": "https://www.igospel.org.br/",
         "feeds": ["https://www.igospel.org.br/feed/", "https://www.igospel.org.br/feed", "https://igospel.org.br/feed/"],
     },
-    {
-        "nome": "Fuxico Gospel",
-        "url": "https://www.fuxicogospel.com.br/",
-        "feeds": ["https://www.fuxicogospel.com.br/feed/", "https://www.fuxicogospel.com.br/feed"],
-    },
 ]
 
 BAD_PATHS = (
@@ -535,7 +530,6 @@ def _is_music_release(article, threshold=60):
 # ============================================================
 
 _SOURCE_VEHICLES = [
-    "Fuxico Gospel", "O Fuxico Gospel", "fuxicogospel", "fuxicogospel.com.br",
     "News Gospel", "newsgospel", "newsgospel.com.br",
     "Folha Gospel", "folhagospel", "folhagospel.com",
     "Guiame", "guiame.com.br",
@@ -864,7 +858,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
     return "\n".join(content) + "\n" + source_marker
 
 def main():
-    print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel + Fuxico Gospel")
+    print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel")
     print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'}")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
