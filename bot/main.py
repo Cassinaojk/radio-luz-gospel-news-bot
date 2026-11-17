@@ -36,7 +36,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.8 (Semana atual + 1 post + título sem colar + filtro índice ampliado)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 16.0 (Dedup genérica por entidades + 1 post + semana atual)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -85,7 +85,6 @@ GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 120
 
 # Apenas notícias do ano corrente e dos últimos 7 dias (semana atual)
-# ATENÇÃO: se houver env var MAX_AGE_DAYS definida no runner, ela sobrescreve.
 MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "7"))
 CURRENT_YEAR = datetime.now().year
 
@@ -137,7 +136,6 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
-# Títulos/expressões que indicam página-índice (não é artigo) — rejeitar cedo
 _INDEX_TITLES = {
     "lançamentos", "lançamento", "notícias", "noticias", "home", "início", "inicio",
     "últimas notícias", "ultimas noticias", "404", "erro 404",
@@ -146,7 +144,6 @@ _INDEX_TITLES = {
     "politica de seguranca e privacidade guiame.com.br",
 }
 
-# Padrões que indicam título de categoria/índice (regex, case-insensitive)
 _INDEX_TITLE_PATTERNS = [
     r"^not[ií]cias\s*[-–—]",
     r"^mundo crist[ãa]o\s*[-–—]",
@@ -166,7 +163,7 @@ _INDEX_TITLE_PATTERNS = [
 ]
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.8)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/16.0)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -391,56 +388,102 @@ def blogger():
 
 _COMPARE_STOPWORDS = {"a", "o", "as", "os", "de", "da", "do", "das", "dos", "e", "em", "um", "uma", "uns", "umas", "para", "por", "com", "no", "na", "nos", "nas", "que", "se", "ao", "aos", "sua", "seu", "suas", "seus", "mais", "como", "sobre", "entre", "apos", "ate", "ja", "nao", "muito", "bem", "ainda", "tambem", "so", "esse", "essa", "este", "esta", "isso", "aquilo", "ele", "ela", "eles", "elas", "vai", "vem", "foi", "sao", "estao", "tem", "ter", "terao", "eh", "ser", "sera", "novo", "nova", "novos", "novas", "lanca", "lancou", "lancam", "lancar", "anuncia", "anunciou", "divulga", "divulgou", "revela", "revelou", "confirma", "confirmou", "veja", "confira", "saiba", "assista", "leia", "chega", "chegou", "radio", "luz", "gospel", "noticia", "noticias", "blog", "materia", "hoje", "agora", "ultima", "ultimas", "ultimo", "ultimos", "video", "videos", "foto", "fotos", "imagem", "imagens", "the", "of", "to", "in", "and", "or", "on", "at", "for", "with", "from", "by"}
 
-def _compare_normalize(text):
-    text = unicodedata.normalize("NFKD", str(text or ""))
-    text = "".join(c for c in text if not unicodedata.combining(c)).lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    return set(w for w in text.split() if len(w) > 1 and w not in _COMPARE_STOPWORDS)
+# ============================================================
+# DEDUPLICAÇÃO GENÉRICA POR ENTIDADES / ASSUNTO
+# ============================================================
 
-def _title_similarity(a, b):
-    if not a or not b: return 0.0
-    return len(a & b) / len(a | b) if (a | b) else 0.0
+# Palavras que indicam "evento/tipo de notícia" (não são entidades, mas reforçam assunto)
+_EVENT_WORDS = {
+    "caravana", "peregrinação", "peregrinacao", "viagem", "jornada", "itinerário", "itinerario",
+    "simpósio", "simposio", "conferência", "conferencia", "congresso", "seminário", "seminario",
+    "encontro", "retiro", "acampamento", "festival", "turnê", "turne", "tour", "show",
+    "lançamento", "lancamento", "single", "álbum", "album", "ep", "mixtape", "clipe", "videoclipe",
+    "livro", "biografia", "autobiografia", "filme", "documentário", "documentario", "série", "serie",
+    "podcast", "entrevista", "eleição", "eleicao", "nomeação", "nomeacao", "demissão", "demissao",
+    "lei", "projeto", "votação", "votacao", "julgamento", "condenação", "condenacao",
+    "morte", "falecimento", "acidente", "ataque", "perseguição", "perseguicao",
+}
 
-def existing(api):
-    blog_urls, source_urls, titles = set(), set(), []
-    bot_count, token = 0, None
-    try:
-        while True:
-            kwargs = {"blogId": BLOGGER_BLOG_ID, "maxResults": 500, "fetchBodies": False}
-            if token: kwargs["pageToken"] = token
-            data = api.posts().list(**kwargs).execute()
-            for post in data.get("items", []):
-                purl = normalize_url(post.get("url", ""))
-                title = (post.get("title") or "").strip()
-                if purl: blog_urls.add(purl)
-                if title: titles.append(title)
-                content = post.get("content", "") or ""
-                if not content:
-                    try:
-                        full = api.posts().get(blogId=BLOGGER_BLOG_ID, postId=post.get("id", ""), fetchBody=True).execute()
-                        content = full.get("content", "") or ""
-                    except Exception:
-                        content = ""
-                for match in re.findall(r'href=["\'](https?://[^"\']+)["\']', content, flags=re.I):
-                    source_urls.add(normalize_url(match))
-                for match in re.findall(r'RADIO_LUZ_GOSPEL_SOURCE_URL:\s*(https?://[^\s]+?)\s*-->', content, flags=re.I):
-                    source_urls.add(normalize_url(match))
-                if re.search(r"RADIO_LUZ_GOSPEL_SOURCE_URL:", content, flags=re.I):
-                    bot_count += 1
-            token = data.get("nextPageToken")
-            if not token: break
-    except Exception as e:
-        print("Erro ao consultar Blogger:", e)
-    print("Posts existentes no Blogger:", len(blog_urls))
-    print("Fontes já registradas:", len(source_urls))
-    print(f"Posts do robô já publicados: {bot_count}")
-    return blog_urls, source_urls, titles, bot_count
+# Termos muito genéricos que NÃO contam como entidade para dedup
+_GENERIC_TERMS = {
+    "brasil", "brasileiro", "brasileira", "igreja", "igrejas", "cristão", "cristao", "cristãos", "cristaos",
+    "evangélico", "evangelico", "evangélicos", "evangelicos", "gospel", "deus", "jesus", "cristo",
+    "notícia", "noticia", "notícias", "noticias", "novo", "nova", "primeiro", "primeira",
+    "ano", "anos", "dia", "dias", "semana", "mês", "mes", "hoje", "ontem", "amanhã", "amanha",
+    "inicia", "iniciou", "começa", "comeca", "começou", "comecou", "segue", "seguiu",
+    "acontece", "aconteceu", "realiza", "realizou", "promove", "promoveu", "anuncia", "anunciou",
+}
 
-def check_blogger_for_duplicate(api, article_title, existing_titles):
+def _normalize_words(text):
+    """Normaliza texto em lista de palavras (sem acento, minúsculas)."""
+    norm = unicodedata.normalize("NFKD", str(text or ""))
+    norm = "".join(c for c in norm if not unicodedata.combining(c)).lower()
+    norm = re.sub(r"[^a-z0-9\s]", " ", norm)
+    return [w for w in norm.split() if w]
+
+def _extract_entities(text):
+    """
+    Extrai entidades genéricas do texto:
+    - Nomes próprios capitalizados (1-3 palavras) do texto ORIGINAL (preserva acento e maiúsculas)
+    - Números de ano (2024, 2025, 2026...)
+    - Eventos (palavras de _EVENT_WORDS)
+    Retorna um set de strings normalizadas (sem acento, minúsculas).
+    """
+    if not text:
+        return set()
+    entities = set()
+    # 1) Captura sequências capitalizadas: "Eli Soares", "Caravana Israel", "Igreja Renascer"
+    caps = re.findall(r"\b([A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇ][a-záéíóúâêîôûãõç]+(?:\s+(?:d[aeo]s?\s+)?[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÇ][a-záéíóúâêîôûãõç]+){0,2})\b", text)
+    for cap in caps:
+        cap_norm = " ".join(_normalize_words(cap))
+        if not cap_norm:
+            continue
+        # descarta entidades genéricas
+        if cap_norm in _GENERIC_TERMS:
+            continue
+        words = cap_norm.split()
+        if all(w in _GENERIC_TERMS or w in _COMPARE_STOPWORDS for w in words):
+            continue
+        entities.add(cap_norm)
+    # 2) Anos (4 dígitos 20xx)
+    for year in re.findall(r"\b20\d{2}\b", text):
+        entities.add(year)
+    # 3) Eventos (palavras fortes)
+    for word in _normalize_words(text):
+        if word in _EVENT_WORDS:
+            entities.add(word)
+    return entities
+
+def _entity_similarity(a, b):
+    """Similaridade baseada em entidades compartilhadas."""
+    if not a or not b:
+        return 0.0, 0
+    shared = a & b
+    if not shared:
+        return 0.0, 0
+    # Ignora anos isolados (são genéricos)
+    shared_strong = {s for s in shared if not re.fullmatch(r"20\d{2}", s)}
+    if not shared_strong:
+        return 0.0, 0
+    # Similaridade Jaccard normal + bônus por entidades fortes
+    jacc = len(shared) / len(a | b)
+    # Conta quantas entidades fortes são nomes compostos (com espaço) ou eventos específicos
+    strong_count = len(shared_strong)
+    return jacc, strong_count
+
+def check_blogger_for_duplicate(api, article_title, existing_titles, article_summary="", article_text=""):
+    """
+    Checa duplicata em 4 camadas:
+    1. URL exata (já é feita fora)
+    2. Similaridade de título (Jaccard >= 0.60)
+    3. Search API do Blogger
+    4. Similaridade de ENTIDADES (genérica — funciona para qualquer assunto)
+    """
     new_words = _compare_normalize(article_title)
     if not new_words:
         return False, ""
 
+    # Camada 1: similaridade direta de título (Jaccard >= 0.60)
     for et in existing_titles:
         et_words = _compare_normalize(et)
         if not et_words:
@@ -449,18 +492,48 @@ def check_blogger_for_duplicate(api, article_title, existing_titles):
         if sim >= 0.60:
             return True, et
 
+    # Camada 2: search API do Blogger
     search_terms = sorted(new_words, key=len, reverse=True)[:2]
-    if not search_terms:
-        return False, ""
-    query = " ".join(search_terms)
-    try:
-        response = api.posts().search(blogId=BLOGGER_BLOG_ID, q=query, fetchBodies=False, maxResults=10).execute()
-        for post in response.get("items", []):
-            pt = post.get("title", "")
-            if _title_similarity(new_words, _compare_normalize(pt)) >= 0.60:
-                return True, pt
-    except Exception as e:
-        pass
+    if search_terms:
+        query = " ".join(search_terms)
+        try:
+            response = api.posts().search(blogId=BLOGGER_BLOG_ID, q=query, fetchBodies=False, maxResults=10).execute()
+            for post in response.get("items", []):
+                pt = post.get("title", "")
+                if _title_similarity(new_words, _compare_normalize(pt)) >= 0.60:
+                    return True, pt
+        except Exception:
+            pass
+
+    # Camada 3: entidades genéricas do título+resumo
+    new_entities = _extract_entities(f"{article_title}. {article_summary}")
+    if new_entities:
+        for et in existing_titles:
+            et_entities = _extract_entities(et)
+            if not et_entities:
+                continue
+            jacc, strong_count = _entity_similarity(new_entities, et_entities)
+            # Regras genéricas:
+            # - 2+ entidades fortes em comum E jaccard >= 0.20 → duplicata
+            # - 1 entidade composta (com espaço, ex.: "eli soares", "caravana israel") E jaccard >= 0.30 → duplicata
+            has_composite = any(" " in e for e in (new_entities & et_entities))
+            if strong_count >= 2 and jacc >= 0.20:
+                return True, f"[entidades {strong_count}x] {et}"
+            if has_composite and jacc >= 0.30:
+                return True, f"[entidade composta] {et}"
+
+    # Camada 4: entidades do texto (só para confirmar — reduz falso negativo)
+    if article_text:
+        new_entities_text = _extract_entities(article_text[:4000])
+        if new_entities_text:
+            for et in existing_titles:
+                et_entities = _extract_entities(et)
+                if not et_entities:
+                    continue
+                jacc, strong_count = _entity_similarity(new_entities_text, et_entities)
+                if strong_count >= 3 and jacc >= 0.30:
+                    return True, f"[texto] {et}"
+
     return False, ""
 
 # ============================================================
@@ -877,7 +950,7 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
     categoria_seo = str(generated.get("categoria_seo", "")).strip()
     palavras = list(generated.get("palavras_chave", []) or [])
 
-    # FIX v15.8: normaliza espaços E remove caracteres invisíveis (ZWSP, NBSP, etc.)
+    # Normaliza espaços e remove caracteres invisíveis (ZWSP, NBSP, BOM)
     titulo_base = unicodedata.normalize("NFC", titulo_base)
     titulo_base = titulo_base.replace("\u200b", "").replace("\u00a0", " ").replace("\ufeff", "")
     titulo_base = re.sub(r"\s+", " ", titulo_base).strip()
@@ -1084,9 +1157,12 @@ def main():
             ignored += 1
             continue
 
-        is_dup, dup_title = check_blogger_for_duplicate(api, article["title"], existing_titles)
+        is_dup, dup_title = check_blogger_for_duplicate(
+            api, article["title"], existing_titles,
+            article_summary="", article_text=article.get("text", "")
+        )
         if is_dup:
-            print(f"⚠ Duplicada (já no blog): «{article['title'][:60]}» ≈ «{dup_title[:60]}»")
+            print(f"⚠ Duplicada (já no blog): «{article['title'][:60]}» ≈ «{dup_title[:80]}»")
             ignored += 1
             continue
 
@@ -1103,9 +1179,12 @@ def main():
             if gemini_quota_hit: break
             continue
 
-        is_dup2, dup_title2 = check_blogger_for_duplicate(api, generated.get("titulo", ""), existing_titles)
+        is_dup2, dup_title2 = check_blogger_for_duplicate(
+            api, generated.get("titulo", ""), existing_titles,
+            article_summary=generated.get("resumo", ""), article_text=generated.get("materia", "")
+        )
         if is_dup2:
-            print(f"⚠ Duplicada pós-IA: «{generated.get('titulo','')[:60]}» ≈ «{dup_title2[:60]}»")
+            print(f"⚠ Duplicada pós-IA: «{generated.get('titulo','')[:60]}» ≈ «{dup_title2[:80]}»")
             ignored += 1
             continue
 
