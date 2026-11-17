@@ -36,7 +36,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.3 (Semana atual + 1 post/execução)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.5 (Semana atual + 1 post + limpeza de contatos/sites)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -137,7 +137,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.3)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.5)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -533,71 +533,137 @@ def _is_music_release(article, threshold=60):
 
 
 # ============================================================
-# LIMPEZA DE MENÇÕES À FONTE ORIGINAL
+# LIMPEZA DE MENÇÕES À FONTE, CONTATOS E SITES
 # ============================================================
 
+# Placeholder para blindar o nome do blog (Rádio Luz Gospel) durante a limpeza
+_LUZ_PLACEHOLDER = "§§RADIO_LUZ_GOSPEL_PROTEGIDO§§"
+
+# Sites/veículos das fontes que NUNCA devem aparecer no texto publicado
 _SOURCE_VEHICLES = [
-    "News Gospel", "newsgospel", "newsgospel.com.br",
-    "Folha Gospel", "folhagospel", "folhagospel.com",
-    "Guiame", "guiame.com.br",
-    "iGospel", "igospel", "igospel.org.br",
+    # Fontes atuais do robô
+    "News Gospel", "newsgospel", "newsgospel.com.br", "www.newsgospel.com.br",
+    "Folha Gospel", "folhagospel", "folhagospel.com", "www.folhagospel.com",
+    "Guiame", "guiame.com.br", "www.guiame.com.br",
+    "iGospel", "igospel", "igospel.org.br", "www.igospel.org.br",
+    # Outros portais gospel que podem aparecer como "fonte" no texto
     "UAU Gospel", "uaugospel", "uaugospel.com.br",
     "Gospel Prime", "gospelprime", "gospelprime.com.br",
-    "Super Gospel", "supergospel",
-    "Portal do Trono", "portaldotrono",
-    "Gospel Mais", "gospelmais",
-    "Comunhão", "comunhao.com.br",
+    "Super Gospel", "supergospel", "supergospel.com.br",
+    "Portal do Trono", "portaldotrono", "portaldotrono.com",
+    "Gospel Mais", "gospelmais", "gospelmais.com.br",
+    "Gospel no Ar", "gospelnoar", "gospelnoar.com",
+    "Guia-me",
+    "Pleno News", "plenonews", "pleno.news",
+    "Show Gospel", "showgospel",
+    "Verdade Gospel", "verdadegospel",
+    "Notícias Gospel", "noticiasgospel",
 ]
 
+# Padrões de atribuição / contato que devem ser REMOVIDOS do texto
 _SOURCE_ATTRIBUTION_PATTERNS = [
+    # ---- Atribuição a veículo ----
     r"(?:confirmad[oa]s?|divulgad[oa]s?|revelad[oa]s?|informad[oa]s?|publicad[oa]s?|noticiad[oa]s?|reportad[oa]s?)\s+(?:pelo|pela|pelo portal|pela equipe|pelo site|pelo blog|pelo jornal|pela revista)\s+[^.!\n]{1,80}[.!]?",
     r"(?:segundo|conforme|de acordo com|como informou|como noticiou|como divulgou|como revelou|como publicou|como reportou)\s+(?:o|a|os|as)?\s*(?:portal|site|blog|jornal|revista|coluna)?\s*[^.!\n]{1,80}[.!]?",
     r"(?:fonte|via|cr[eé]ditos?|imagem|foto)\s*[:\-–]\s*[^.!\n]{1,100}[.!]?",
     r"a\s+reportagem\s+foi\s+baseada[^.!\n]{0,200}[.!]?",
     r"caso\s+haja\s+qualquer\s+corre[çc][ãa]o[^.!\n]{0,200}[.!]?",
     r"a\s+reda[çc][ãa]o\s+pode\s+ser\s+contatada[^.!\n]{0,200}[.!]?",
-    r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
-    r"https?://[^\s<>\"]+",
     r"(?:leia|continue|veja|confira)\s+(?:mais|a\s+mat[eé]ria\s+completa|o\s+conte[uú]do\s+completo)\s+(?:em|no|na)\s+[^.!\n]{1,120}[.!]?",
     r"publicad[oa]\s+originalmente[^.!\n]{0,120}[.!]?",
     r"com\s+informa[çc][õo]es\s+(?:de|do|da)\s+[^.!\n]{1,120}[.!]?",
     r"\((?:foto|imagem|divulga[çc][ãa]o)\s*:[^)]{0,120}\)",
+
+    # ---- E-mails ----
+    r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
+
+    # ---- URLs (http/https) ----
+    r"https?://[^\s<>\"]+",
+
+    # ---- WhatsApp / Telegram links ----
+    r"(?:https?://)?(?:wa\.me|api\.whatsapp\.com|chat\.whatsapp\.com)/[^\s<>\"']*",
+    r"(?:https?://)?t\.me/[^\s<>\"']*",
+
+    # ---- Rótulos + número de telefone/WhatsApp ----
+    r"(?:whats?\s*app|whatsapp|zap|telefone|tel\.?|fone|celular|contato|whats)\s*[:\-–]?\s*\(?\d{2,3}\)?[\s\.\-]?\d{4,5}[\s\.\-]?\d{4}",
+    r"(?:whats?\s*app|whatsapp|zap|telefone|tel\.?|fone|celular|contato|whats)\s*[:\-–]?\s*\+?\d{1,3}[\s\.\-]?\(?\d{2,3}\)?[\s\.\-]?\d{4,5}[\s\.\-]?\d{4}",
+
+    # ---- Número de telefone brasileiro "solto" ----
+    r"\(?\d{2}\)?[\s\.\-]?9?\d{4}[\s\.\-]?\d{4}",
+    # ---- Número internacional com + ----
+    r"\+\d{1,3}[\s\.\-]?\(?\d{2,3}\)?[\s\.\-]?\d{4,5}[\s\.\-]?\d{4}",
+
+    # ---- @handles (Instagram/Twitter/etc) ----
+    r"(?<![\w.])@[A-Za-z0-9_.]{2,30}",
+
+    # ---- "Siga/Fale conosco/Envie mensagem" ----
+    r"(?:fale\s+conosco|entre\s+em\s+contato|envie\s+(?:uma\s+)?mensagem|mande\s+(?:uma\s+)?mensagem|chame\s+no\s+(?:whats?|zap|telegram|direct))[^.!\n]{0,160}[.!]?",
 ]
+
+
+def _protect_blog_name(text):
+    """Substitui o nome do blog por placeholder para não ser removido."""
+    if not text:
+        return text
+    protected = re.sub(r"Rádio\s+Luz\s+Gospel", _LUZ_PLACEHOLDER, text, flags=re.IGNORECASE)
+    protected = re.sub(r"Radio\s+Luz\s+Gospel", _LUZ_PLACEHOLDER, protected, flags=re.IGNORECASE)
+    protected = re.sub(r"RÁDIO\s+LUZ\s+GOSPEL", _LUZ_PLACEHOLDER, protected)
+    return protected
+
+
+def _restore_blog_name(text):
+    if not text:
+        return text
+    return text.replace(_LUZ_PLACEHOLDER, "Rádio Luz Gospel")
 
 
 def _clean_source_mentions(text):
     if not text:
         return text
     original = text
+
+    # 1) Protege o nome do blog (Rádio Luz Gospel) para não ser apagado
+    text = _protect_blog_name(text)
+
+    # 2) Remove padrões de atribuição, e-mails, URLs, telefones, @handles, etc.
     for pattern in _SOURCE_ATTRIBUTION_PATTERNS:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
+
+    # 3) Remove nomes/domínios dos veículos de origem
     for vehicle in _SOURCE_VEHICLES:
         v = re.escape(vehicle)
         text = re.sub(
             r"\b(?:o|a|os|as|do|da|dos|das|no|na|nos|nas|pelo|pela|pelos|pelas)?\s*" + v + r"\b",
             "", text, flags=re.IGNORECASE,
         )
+
+    # 4) Restaura o nome do blog
+    text = _restore_blog_name(text)
+
+    # 5) Limpeza cosmética
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"\s+([.,;:!?])", r"\1", text)
     text = re.sub(r"\.\s*\.", ".", text)
     text = re.sub(r"^\s+", "", text)
     text = re.sub(r"\s+$", "", text)
+
     lines = []
     for line in text.split("\n"):
-        s = line.strip()
-        if not s:
+        st = line.strip()
+        if not st:
             lines.append("")
             continue
-        if re.fullmatch(r"[\.\-–—•\s]+", s):
+        if re.fullmatch(r"[\.\-–—•\s]+", st):
             continue
-        lines.append(s)
+        lines.append(st)
     text = "\n".join(lines)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()
+
     if text != original:
         removed = len(original) - len(text)
         if removed > 30:
-            print(f"✓ Limpeza de fonte: -{removed} chars")
+            print(f"✓ Limpeza de fonte/contato/site: -{removed} chars")
     return text
 
 
@@ -665,11 +731,13 @@ Use SOMENTE os fatos do texto-fonte. Não invente.
 
 REGRAS ABSOLUTAS (não negocie):
 1. NUNCA mencione o nome do veículo de origem, site, portal, jornal, blog, revista,
-   coluna, agência ou programa de onde a informação foi obtida.
+   coluna, agência ou programa de onde a informação foi obtida
+   (ex.: News Gospel, Folha Gospel, Guiame, iGospel, nem seus domínios).
 2. NUNCA escreva "segundo o X", "conforme o X", "de acordo com o X",
    "como informou o X", "fonte: X", "via X", "créditos: X",
    "com informações de X", "publicado originalmente em X".
-3. NUNCA inclua e-mails de contato, URLs, links ou frases do tipo
+3. NUNCA inclua e-mails de contato, URLs, links, números de telefone,
+   números de WhatsApp, @handles (Instagram/X/etc) nem frases do tipo
    "a reportagem foi baseada em…", "caso haja correção…",
    "a redação pode ser contatada…", "leia mais em…", "continue lendo em…".
 4. NUNCA copie frases literais do texto-fonte — reescreva com suas palavras.
