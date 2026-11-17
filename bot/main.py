@@ -36,7 +36,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.7 (Semana atual + 1 post + IA com retry/backoff)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.8 (Semana atual + 1 post + título sem colar + filtro índice ampliado)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -137,21 +137,36 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
+# Títulos/expressões que indicam página-índice (não é artigo) — rejeitar cedo
 _INDEX_TITLES = {
     "lançamentos", "lançamento", "notícias", "noticias", "home", "início", "inicio",
     "últimas notícias", "ultimas noticias", "404", "erro 404",
-    "mundo cristão", "mundo cristao", "missões", "missoes",
-    "testemunhos", "testemunhos em guiame", "vídeos gospel", "videos gospel",
-    "livros gospel", "agenda gospel", "família", "familia",
-    "música gospel nacional", "musica gospel nacional",
-    "música gospel internacional", "musica gospel internacional",
+    "testemunhos", "testemunhos em guiame",
     "fale conosco", "política de segurança e privacidade guiame.com.br",
     "politica de seguranca e privacidade guiame.com.br",
-    "gastronomia", "moda e beleza", "turismo", "saúde", "saude",
 }
 
+# Padrões que indicam título de categoria/índice (regex, case-insensitive)
+_INDEX_TITLE_PATTERNS = [
+    r"^not[ií]cias\s*[-–—]",
+    r"^mundo crist[ãa]o\s*[-–—]",
+    r"^miss[õo]es\s*[-–—]",
+    r"^fam[íi]lia\s*[-–—]",
+    r"^v[íi]deos gospel\s*[-–—]",
+    r"^livros gospel\s*[-–—]",
+    r"^agenda gospel\s*[-–—]",
+    r"^m[úu]sica gospel nacional\s*[-–—]",
+    r"^m[úu]sica gospel internacional\s*[-–—]",
+    r"^gastronomia\s*[-–—]",
+    r"^moda e beleza\s*[-–—]",
+    r"^turismo\s*[-–—]",
+    r"^sa[úu]de\s*[-–—]",
+    r"^pol[íi]tica\s*[-–—]",
+    r"^israel\s*[-–—]",
+]
+
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.7)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.8)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -297,6 +312,10 @@ def get_article(url):
     if title_lower in _INDEX_TITLES:
         print(f"⚠ Pulada (índice): {title[:70]}")
         return None
+    for pat in _INDEX_TITLE_PATTERNS:
+        if re.match(pat, title_lower):
+            print(f"⚠ Pulada (índice regex): {title[:70]}")
+            return None
 
     d = article_date(x)
 
@@ -694,7 +713,6 @@ def promote_telegram(title, post_url, summary=""):
     return False
 
 def _call_gemini_with_retry(api_key, model, prompt, client=None):
-    """Chama Gemini com retry/backoff em 503 (UNAVAILABLE) e 429 (quota)."""
     last_err = None
     for attempt in range(1, GEMINI_MAX_RETRIES + 1):
         try:
@@ -795,8 +813,6 @@ TEXTO-FONTE (referência interna, NÃO cite nem copie):
                     "temperature": 0.2,
                     "max_tokens": 5000,
                 }
-                # Groq: response_format json_object exige prompt com "JSON" e às vezes falha
-                # com json_validate_failed. Removemos para maior robustez.
                 if provider == "mistral":
                     payload_req["response_format"] = {"type": "json_object"}
                 r = requests.post(
@@ -861,10 +877,14 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
     categoria_seo = str(generated.get("categoria_seo", "")).strip()
     palavras = list(generated.get("palavras_chave", []) or [])
 
-    # FIX: normaliza espaços antes de anexar o sufixo para evitar "l| Rádio Luz Gospel"
+    # FIX v15.8: normaliza espaços E remove caracteres invisíveis (ZWSP, NBSP, etc.)
+    titulo_base = unicodedata.normalize("NFC", titulo_base)
+    titulo_base = titulo_base.replace("\u200b", "").replace("\u00a0", " ").replace("\ufeff", "")
     titulo_base = re.sub(r"\s+", " ", titulo_base).strip()
+
     if SEO_TITLE_SUFFIX and not titulo_base.lower().endswith(SEO_TITLE_SUFFIX.lower()):
-        title = f"{titulo_base}{SEO_TITLE_SUFFIX}"
+        # Garante exatamente um espaço antes do sufixo " | Rádio Luz Gospel"
+        title = f"{titulo_base.rstrip()} {SEO_TITLE_SUFFIX.lstrip()}"
     else:
         title = titulo_base
     title = re.sub(r"\s{2,}", " ", title).strip()
