@@ -36,7 +36,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.6 (Semana atual + 1 post + IA corrigida + limpeza)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.7 (Semana atual + 1 post + IA com retry/backoff)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -137,7 +137,6 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
-# Títulos que indicam página-índice (não são artigos) — rejeitar cedo
 _INDEX_TITLES = {
     "lançamentos", "lançamento", "notícias", "noticias", "home", "início", "inicio",
     "últimas notícias", "ultimas noticias", "404", "erro 404",
@@ -152,7 +151,7 @@ _INDEX_TITLES = {
 }
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.6)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.7)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -301,7 +300,6 @@ def get_article(url):
 
     d = article_date(x)
 
-    # ===== REGRAS DE DATA: SOMENTE ANO CORRENTE E SEMANA ATUAL =====
     if not d:
         print(f"⚠ Sem data identificada (rejeitada): {title[:70]}")
         return None
@@ -313,7 +311,6 @@ def get_article(url):
         print(f"⚠ Fora da semana: {title[:70]} (publicada {d.strftime('%d/%m/%Y')}, {age:.1f} dias)")
         return None
     print(f"✓ Data OK: {title[:70]} ({age:.2f} dias, {d.strftime('%d/%m/%Y')})")
-    # =============================================================
 
     img = image_original(x) or ""
     box = x.find("article") or x.find("main") or x
@@ -554,12 +551,10 @@ def _is_music_release(article, threshold=60):
 _LUZ_PLACEHOLDER = "§§RADIO_LUZ_GOSPEL_PROTEGIDO§§"
 
 _SOURCE_VEHICLES = [
-    # Fontes atuais do robô
     "News Gospel", "newsgospel", "newsgospel.com.br", "www.newsgospel.com.br",
     "Folha Gospel", "folhagospel", "folhagospel.com", "www.folhagospel.com",
     "Guiame", "guiame.com.br", "www.guiame.com.br",
     "iGospel", "igospel", "igospel.org.br", "www.igospel.org.br",
-    # Outros portais gospel que podem aparecer como "fonte" no texto
     "UAU Gospel", "uaugospel", "uaugospel.com.br",
     "Gospel Prime", "gospelprime", "gospelprime.com.br",
     "Super Gospel", "supergospel", "supergospel.com.br",
@@ -574,7 +569,6 @@ _SOURCE_VEHICLES = [
 ]
 
 _SOURCE_ATTRIBUTION_PATTERNS = [
-    # ---- Atribuição a veículo ----
     r"(?:confirmad[oa]s?|divulgad[oa]s?|revelad[oa]s?|informad[oa]s?|publicad[oa]s?|noticiad[oa]s?|reportad[oa]s?)\s+(?:pelo|pela|pelo portal|pela equipe|pelo site|pelo blog|pelo jornal|pela revista)\s+[^.!\n]{1,80}[.!]?",
     r"(?:segundo|conforme|de acordo com|como informou|como noticiou|como divulgou|como revelou|como publicou|como reportou)\s+(?:o|a|os|as)?\s*(?:portal|site|blog|jornal|revista|coluna)?\s*[^.!\n]{1,80}[.!]?",
     r"(?:fonte|via|cr[eé]ditos?|imagem|foto)\s*[:\-–]\s*[^.!\n]{1,100}[.!]?",
@@ -585,30 +579,15 @@ _SOURCE_ATTRIBUTION_PATTERNS = [
     r"publicad[oa]\s+originalmente[^.!\n]{0,120}[.!]?",
     r"com\s+informa[çc][õo]es\s+(?:de|do|da)\s+[^.!\n]{1,120}[.!]?",
     r"\((?:foto|imagem|divulga[çc][ãa]o)\s*:[^)]{0,120}\)",
-
-    # ---- E-mails ----
     r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
-
-    # ---- URLs (http/https) ----
     r"https?://[^\s<>\"]+",
-
-    # ---- WhatsApp / Telegram links ----
     r"(?:https?://)?(?:wa\.me|api\.whatsapp\.com|chat\.whatsapp\.com)/[^\s<>\"']*",
     r"(?:https?://)?t\.me/[^\s<>\"']*",
-
-    # ---- Rótulos + número de telefone/WhatsApp ----
     r"(?:whats?\s*app|whatsapp|zap|telefone|tel\.?|fone|celular|contato|whats)\s*[:\-–]?\s*\(?\d{2,3}\)?[\s\.\-]?\d{4,5}[\s\.\-]?\d{4}",
     r"(?:whats?\s*app|whatsapp|zap|telefone|tel\.?|fone|celular|contato|whats)\s*[:\-–]?\s*\+?\d{1,3}[\s\.\-]?\(?\d{2,3}\)?[\s\.\-]?\d{4,5}[\s\.\-]?\d{4}",
-
-    # ---- Número de telefone brasileiro "solto" ----
     r"\(?\d{2}\)?[\s\.\-]?9?\d{4}[\s\.\-]?\d{4}",
-    # ---- Número internacional com + ----
     r"\+\d{1,3}[\s\.\-]?\(?\d{2,3}\)?[\s\.\-]?\d{4,5}[\s\.\-]?\d{4}",
-
-    # ---- @handles ----
     r"(?<![\w.])@[A-Za-z0-9_.]{2,30}",
-
-    # ---- "Siga/Fale conosco/Envie mensagem" ----
     r"(?:fale\s+conosco|entre\s+em\s+contato|envie\s+(?:uma\s+)?mensagem|mande\s+(?:uma\s+)?mensagem|chame\s+no\s+(?:whats?|zap|telegram|direct))[^.!\n]{0,160}[.!]?",
 ]
 
@@ -714,6 +693,33 @@ def promote_telegram(title, post_url, summary=""):
         print(f"⚠ Telegram: erro {str(e)[:150]}")
     return False
 
+def _call_gemini_with_retry(api_key, model, prompt, client=None):
+    """Chama Gemini com retry/backoff em 503 (UNAVAILABLE) e 429 (quota)."""
+    last_err = None
+    for attempt in range(1, GEMINI_MAX_RETRIES + 1):
+        try:
+            use_client = client if client is not None else genai.Client(api_key=api_key)
+            with contextlib.redirect_stderr(io.StringIO()):
+                resp = use_client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config={"response_mime_type": "application/json"},
+                )
+            return (getattr(resp, "text", None) or "").strip()
+        except Exception as exc:
+            last_err = exc
+            msg = str(exc).upper()
+            transient = any(x in msg for x in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE LIMIT", "TIMEOUT", "DEADLINE"))
+            if transient and attempt < GEMINI_MAX_RETRIES:
+                wait = GEMINI_RETRY_BASE_SECONDS * (2 ** (attempt - 1))
+                print(f"⚠ gemini: {str(exc)[:120]} — retry {attempt}/{GEMINI_MAX_RETRIES} em {wait}s")
+                time.sleep(wait)
+                continue
+            raise
+    if last_err:
+        raise last_err
+    return ""
+
 def gemini(article, client=None):
     global gemini_calls, gemini_quota_hit, _ai_config_logged
     if gemini_calls >= MAX_GEMINI_TEXT_CALLS_PER_RUN:
@@ -761,8 +767,9 @@ nome da música/álbum, data de lançamento, plataformas e gravadora quando houv
 CRITÉRIO DE PUBLICAÇÃO: marque publicar=true para QUALQUER notícia gospel/cristã/evangélica.
 Marque publicar=false SOMENTE se for COMPLETAMENTE alheia ao universo gospel.
 
-FORMATO JSON:
-{{"publicar":true,"titulo":"...","resumo":"...","materia":"...","assunto_principal":"...","palavras_chave":["..."],"categoria_seo":"..."}}
+RESPONDA APENAS COM UM OBJETO JSON VÁLIDO — sem markdown, sem ```json, sem texto
+fora do objeto. O formato é EXATAMENTE este (substitua os "..."):
+{{"publicar": true, "titulo": "...", "resumo": "...", "materia": "...", "assunto_principal": "...", "palavras_chave": ["...", "..."], "categoria_seo": "..."}}
 
 TÍTULO ORIGINAL (referência interna, NÃO cite): {article['title']}
 TEXTO-FONTE (referência interna, NÃO cite nem copie):
@@ -775,49 +782,50 @@ TEXTO-FONTE (referência interna, NÃO cite nem copie):
         try:
             print(f"IA: {provider}/{model}...")
             if provider.startswith("gemini"):
-                # FIX: usa o client já criado na main() quando for o provider principal;
-                # caso contrário, cria um client local desvinculado do contexto
-                use_client = client if (provider == "gemini" and client is not None) else genai.Client(api_key=api_key)
-                with contextlib.redirect_stderr(io.StringIO()):
-                    resp = use_client.models.generate_content(
-                        model=model,
-                        contents=prompt,
-                        config={"response_mime_type": "application/json"},
-                    )
-                raw = (getattr(resp, "text", None) or "").strip()
+                use_client = client if (provider == "gemini" and client is not None) else None
+                raw = _call_gemini_with_retry(api_key, model, prompt, client=use_client)
             else:
                 endpoint = {
                     "groq": "https://api.groq.com/openai/v1/chat/completions",
                     "mistral": "https://api.mistral.ai/v1/chat/completions",
                 }[provider]
+                payload_req = {
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.2,
+                    "max_tokens": 5000,
+                }
+                # Groq: response_format json_object exige prompt com "JSON" e às vezes falha
+                # com json_validate_failed. Removemos para maior robustez.
+                if provider == "mistral":
+                    payload_req["response_format"] = {"type": "json_object"}
                 r = requests.post(
                     endpoint,
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.2,
-                        "max_tokens": 5000,
-                        "response_format": {"type": "json_object"},
-                    },
+                    json=payload_req,
                     timeout=AI_PROVIDER_TIMEOUT,
                 )
-                # FIX: loga o erro real em vez de estourar KeyError 'choices'
+                if r.status_code == 429:
+                    print(f"⚠ {provider}: HTTP 429 (rate limit) — esgotando provider neste run")
+                    exhausted.add(provider)
+                    continue
+                if r.status_code in (401, 403):
+                    print(f"⚠ {provider}: HTTP {r.status_code} — credenciais/modelo inválidos. {r.text[:200]}")
+                    exhausted.add(provider)
+                    continue
                 if r.status_code != 200:
                     print(f"⚠ {provider}: HTTP {r.status_code} — {r.text[:300]}")
-                    if r.status_code in (401, 403):
-                        exhausted.add(provider)
                     continue
                 try:
-                    payload = r.json()
+                    resp_json = r.json()
                 except Exception:
                     print(f"⚠ {provider}: resposta não-JSON — {r.text[:300]}")
                     continue
-                if "choices" not in payload or not payload["choices"]:
-                    print(f"⚠ {provider}: resposta sem 'choices' — {str(payload)[:300]}")
+                if "choices" not in resp_json or not resp_json["choices"]:
+                    print(f"⚠ {provider}: resposta sem 'choices' — {str(resp_json)[:300]}")
                     exhausted.add(provider)
                     continue
-                raw = payload["choices"][0]["message"]["content"].strip()
+                raw = resp_json["choices"][0]["message"]["content"].strip()
             gemini_calls += 1
             raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
             data = json.loads(raw)
@@ -832,12 +840,17 @@ TEXTO-FONTE (referência interna, NÃO cite nem copie):
             if not titulo or not resumo or len(materia) < 700: continue
             print(f"✓ IA: matéria aprovada ({provider})")
             return {"publicar": True, "titulo": titulo, "resumo": resumo, "materia": materia, "assunto_principal": str(data.get("assunto_principal", "")).strip(), "palavras_chave": data.get("palavras_chave", [])[:SEO_KEYWORDS_MAX], "categoria_seo": str(data.get("categoria_seo", "")).strip()}
+        except json.JSONDecodeError as je:
+            print(f"⚠ {provider}: JSON inválido — {str(je)[:200]}")
+            continue
         except Exception as exc:
-            if any(x in str(exc).upper() for x in ("429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE LIMIT")):
+            msg = str(exc).upper()
+            if any(x in msg for x in ("429", "RESOURCE_EXHAUSTED", "QUOTA", "RATE LIMIT")):
                 exhausted.add(provider)
                 print(f"⚠ {provider}: quota")
             else:
                 print(f"⚠ {provider}: {str(exc)[:200]}")
+            continue
     return None
 
 def build_seo_payload(article, generated, final_image="", image_origin=""):
@@ -848,7 +861,14 @@ def build_seo_payload(article, generated, final_image="", image_origin=""):
     categoria_seo = str(generated.get("categoria_seo", "")).strip()
     palavras = list(generated.get("palavras_chave", []) or [])
 
-    title = f"{titulo_base}{SEO_TITLE_SUFFIX}" if SEO_TITLE_SUFFIX and not titulo_base.lower().endswith(SEO_TITLE_SUFFIX.lower()) else titulo_base
+    # FIX: normaliza espaços antes de anexar o sufixo para evitar "l| Rádio Luz Gospel"
+    titulo_base = re.sub(r"\s+", " ", titulo_base).strip()
+    if SEO_TITLE_SUFFIX and not titulo_base.lower().endswith(SEO_TITLE_SUFFIX.lower()):
+        title = f"{titulo_base}{SEO_TITLE_SUFFIX}"
+    else:
+        title = titulo_base
+    title = re.sub(r"\s{2,}", " ", title).strip()
+
     description = (resumo or BeautifulSoup(materia, "html.parser").get_text(" ", strip=True)[:SEO_DESCRIPTION_MAX])[:SEO_DESCRIPTION_MAX]
 
     kw = []
@@ -1029,7 +1049,6 @@ def main():
             ignored += 1
             continue
 
-        # ===== DEFESA EXTRA: revalidar data antes de publicar =====
         adate = article.get("date")
         if not adate:
             print(f"⚠ Sem data, ignorando: {article['title'][:60]}")
@@ -1044,7 +1063,6 @@ def main():
             print(f"⚠ Fora da semana ({age_days:.1f} dias), ignorando: {article['title'][:60]}")
             ignored += 1
             continue
-        # =========================================================
 
         is_dup, dup_title = check_blogger_for_duplicate(api, article["title"], existing_titles)
         if is_dup:
