@@ -36,7 +36,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.5 (Semana atual + 1 post + limpeza de contatos/sites)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.6 (Semana atual + 1 post + IA corrigida + limpeza)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -85,6 +85,7 @@ GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 120
 
 # Apenas notícias do ano corrente e dos últimos 7 dias (semana atual)
+# ATENÇÃO: se houver env var MAX_AGE_DAYS definida no runner, ela sobrescreve.
 MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "7"))
 CURRENT_YEAR = datetime.now().year
 
@@ -136,8 +137,22 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
+# Títulos que indicam página-índice (não são artigos) — rejeitar cedo
+_INDEX_TITLES = {
+    "lançamentos", "lançamento", "notícias", "noticias", "home", "início", "inicio",
+    "últimas notícias", "ultimas noticias", "404", "erro 404",
+    "mundo cristão", "mundo cristao", "missões", "missoes",
+    "testemunhos", "testemunhos em guiame", "vídeos gospel", "videos gospel",
+    "livros gospel", "agenda gospel", "família", "familia",
+    "música gospel nacional", "musica gospel nacional",
+    "música gospel internacional", "musica gospel internacional",
+    "fale conosco", "política de segurança e privacidade guiame.com.br",
+    "politica de seguranca e privacidade guiame.com.br",
+    "gastronomia", "moda e beleza", "turismo", "saúde", "saude",
+}
+
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.5)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.6)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -280,7 +295,7 @@ def get_article(url):
     title = re.sub(r"\s+", " ", n.get_text(" ", strip=True) if n else "").strip()
     if not title: return None
     title_lower = title.lower()
-    if title_lower in {"lançamentos", "notícias", "noticias", "home", "início", "inicio", "últimas notícias", "ultimas noticias", "404"}:
+    if title_lower in _INDEX_TITLES:
         print(f"⚠ Pulada (índice): {title[:70]}")
         return None
 
@@ -536,10 +551,8 @@ def _is_music_release(article, threshold=60):
 # LIMPEZA DE MENÇÕES À FONTE, CONTATOS E SITES
 # ============================================================
 
-# Placeholder para blindar o nome do blog (Rádio Luz Gospel) durante a limpeza
 _LUZ_PLACEHOLDER = "§§RADIO_LUZ_GOSPEL_PROTEGIDO§§"
 
-# Sites/veículos das fontes que NUNCA devem aparecer no texto publicado
 _SOURCE_VEHICLES = [
     # Fontes atuais do robô
     "News Gospel", "newsgospel", "newsgospel.com.br", "www.newsgospel.com.br",
@@ -560,7 +573,6 @@ _SOURCE_VEHICLES = [
     "Notícias Gospel", "noticiasgospel",
 ]
 
-# Padrões de atribuição / contato que devem ser REMOVIDOS do texto
 _SOURCE_ATTRIBUTION_PATTERNS = [
     # ---- Atribuição a veículo ----
     r"(?:confirmad[oa]s?|divulgad[oa]s?|revelad[oa]s?|informad[oa]s?|publicad[oa]s?|noticiad[oa]s?|reportad[oa]s?)\s+(?:pelo|pela|pelo portal|pela equipe|pelo site|pelo blog|pelo jornal|pela revista)\s+[^.!\n]{1,80}[.!]?",
@@ -593,7 +605,7 @@ _SOURCE_ATTRIBUTION_PATTERNS = [
     # ---- Número internacional com + ----
     r"\+\d{1,3}[\s\.\-]?\(?\d{2,3}\)?[\s\.\-]?\d{4,5}[\s\.\-]?\d{4}",
 
-    # ---- @handles (Instagram/Twitter/etc) ----
+    # ---- @handles ----
     r"(?<![\w.])@[A-Za-z0-9_.]{2,30}",
 
     # ---- "Siga/Fale conosco/Envie mensagem" ----
@@ -602,7 +614,6 @@ _SOURCE_ATTRIBUTION_PATTERNS = [
 
 
 def _protect_blog_name(text):
-    """Substitui o nome do blog por placeholder para não ser removido."""
     if not text:
         return text
     protected = re.sub(r"Rádio\s+Luz\s+Gospel", _LUZ_PLACEHOLDER, text, flags=re.IGNORECASE)
@@ -622,14 +633,11 @@ def _clean_source_mentions(text):
         return text
     original = text
 
-    # 1) Protege o nome do blog (Rádio Luz Gospel) para não ser apagado
     text = _protect_blog_name(text)
 
-    # 2) Remove padrões de atribuição, e-mails, URLs, telefones, @handles, etc.
     for pattern in _SOURCE_ATTRIBUTION_PATTERNS:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
 
-    # 3) Remove nomes/domínios dos veículos de origem
     for vehicle in _SOURCE_VEHICLES:
         v = re.escape(vehicle)
         text = re.sub(
@@ -637,10 +645,8 @@ def _clean_source_mentions(text):
             "", text, flags=re.IGNORECASE,
         )
 
-    # 4) Restaura o nome do blog
     text = _restore_blog_name(text)
 
-    # 5) Limpeza cosmética
     text = re.sub(r"[ \t]{2,}", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"\s+([.,;:!?])", r"\1", text)
@@ -769,13 +775,49 @@ TEXTO-FONTE (referência interna, NÃO cite nem copie):
         try:
             print(f"IA: {provider}/{model}...")
             if provider.startswith("gemini"):
+                # FIX: usa o client já criado na main() quando for o provider principal;
+                # caso contrário, cria um client local desvinculado do contexto
+                use_client = client if (provider == "gemini" and client is not None) else genai.Client(api_key=api_key)
                 with contextlib.redirect_stderr(io.StringIO()):
-                    resp = genai.Client(api_key=api_key).models.generate_content(model=model, contents=prompt, config={"response_mime_type": "application/json"})
+                    resp = use_client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config={"response_mime_type": "application/json"},
+                    )
                 raw = (getattr(resp, "text", None) or "").strip()
             else:
-                endpoint = {"groq": "https://api.groq.com/openai/v1/chat/completions", "mistral": "https://api.mistral.ai/v1/chat/completions"}[provider]
-                r = requests.post(endpoint, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2, "max_tokens": 5000, "response_format": {"type": "json_object"}}, timeout=AI_PROVIDER_TIMEOUT)
-                raw = r.json()["choices"][0]["message"]["content"].strip()
+                endpoint = {
+                    "groq": "https://api.groq.com/openai/v1/chat/completions",
+                    "mistral": "https://api.mistral.ai/v1/chat/completions",
+                }[provider]
+                r = requests.post(
+                    endpoint,
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.2,
+                        "max_tokens": 5000,
+                        "response_format": {"type": "json_object"},
+                    },
+                    timeout=AI_PROVIDER_TIMEOUT,
+                )
+                # FIX: loga o erro real em vez de estourar KeyError 'choices'
+                if r.status_code != 200:
+                    print(f"⚠ {provider}: HTTP {r.status_code} — {r.text[:300]}")
+                    if r.status_code in (401, 403):
+                        exhausted.add(provider)
+                    continue
+                try:
+                    payload = r.json()
+                except Exception:
+                    print(f"⚠ {provider}: resposta não-JSON — {r.text[:300]}")
+                    continue
+                if "choices" not in payload or not payload["choices"]:
+                    print(f"⚠ {provider}: resposta sem 'choices' — {str(payload)[:300]}")
+                    exhausted.add(provider)
+                    continue
+                raw = payload["choices"][0]["message"]["content"].strip()
             gemini_calls += 1
             raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw).strip()
             data = json.loads(raw)
@@ -795,7 +837,7 @@ TEXTO-FONTE (referência interna, NÃO cite nem copie):
                 exhausted.add(provider)
                 print(f"⚠ {provider}: quota")
             else:
-                print(f"⚠ {provider}: {str(exc)[:150]}")
+                print(f"⚠ {provider}: {str(exc)[:200]}")
     return None
 
 def build_seo_payload(article, generated, final_image="", image_origin=""):
