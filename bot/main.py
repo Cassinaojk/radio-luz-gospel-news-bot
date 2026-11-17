@@ -36,7 +36,7 @@ from google import genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
-print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.2 (Prioridade: Lançamentos Musicais + Autoral)")
+print("RÁDIO LUZ GOSPEL - ROBÔ DE NOTÍCIAS 15.3 (Semana atual + 1 post/execução)")
 
 BLOGGER_BLOG_ID = os.environ["BLOGGER_BLOG_ID"]
 GOOGLE_CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -77,13 +77,16 @@ IMAGE_FILES = [
     "bot/Imagens/radioluzgospel12.jpg",
 ]
 
-MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "2"))
+# ===== REGRAS DE PUBLICAÇÃO =====
+MAX_POSTS_PER_RUN = 1
 MAX_GEMINI_TEXT_CALLS_PER_RUN = int(os.getenv("MAX_GEMINI_TEXT_CALLS_PER_RUN", "6"))
 GEMINI_MAX_RETRIES = 3
 GEMINI_RETRY_BASE_SECONDS = 4
 MAX_LINKS_PER_SOURCE = 120
 
-MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "4"))
+# Apenas notícias do ano corrente e dos últimos 7 dias (semana atual)
+MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "7"))
+CURRENT_YEAR = datetime.now().year
 
 MIN_SOURCE_CHARS = 250
 MIN_SOURCE_PARAGRAPHS = 1
@@ -134,7 +137,7 @@ SHARE_DOMAINS = ("pinterest.", "reddit.com/submit", "facebook.com/sharer", "twit
 VIDEO_HOSTS = ("youtube.com/embed/", "youtube.com/watch", "youtube-nocookie.com/embed/", "youtu.be/", "player.vimeo.com", "vimeo.com/video", "facebook.com/plugins/video", "web.facebook.com/plugins/video", "instagram.com/p/", "instagram.com/reel/", "instagram.com/tv/", "dailymotion.com/embed", "twitch.tv/", "streamable.com/e/", "rumble.com/embed")
 
 s = requests.Session()
-s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.2)"})
+s.headers.update({"User-Agent": "Mozilla/5.0 (compatible; RadioLuzGospelBot/15.3)"})
 
 gemini_calls = 0
 gemini_quota_hit = False
@@ -282,14 +285,20 @@ def get_article(url):
         return None
 
     d = article_date(x)
-    if d:
-        age = (datetime.now() - d).total_seconds() / 86400
-        if age > MAX_AGE_DAYS:
-            print(f"⚠ Notícia antiga: {title[:70]} (publicada {d.strftime('%d/%m/%Y')}, {age:.1f} dias)")
-            return None
-        print(f"✓ Data OK: {title[:70]} ({age:.2f} dias)")
-    else:
-        print(f"⚠ Data não identificada: {title[:70]} — aceitando")
+
+    # ===== REGRAS DE DATA: SOMENTE ANO CORRENTE E SEMANA ATUAL =====
+    if not d:
+        print(f"⚠ Sem data identificada (rejeitada): {title[:70]}")
+        return None
+    if d.year != CURRENT_YEAR:
+        print(f"⚠ Fora do ano corrente ({d.year}): {title[:70]}")
+        return None
+    age = (datetime.now() - d).total_seconds() / 86400
+    if age > MAX_AGE_DAYS or age < 0:
+        print(f"⚠ Fora da semana: {title[:70]} (publicada {d.strftime('%d/%m/%Y')}, {age:.1f} dias)")
+        return None
+    print(f"✓ Data OK: {title[:70]} ({age:.2f} dias, {d.strftime('%d/%m/%Y')})")
+    # =============================================================
 
     img = image_original(x) or ""
     box = x.find("article") or x.find("main") or x
@@ -328,8 +337,6 @@ def links(source):
             if u and not bad_url(u) and host_matches(u) and u not in seen:
                 seen.add(u)
                 out.append(u)
-
-    rss_count = len(out)
 
     x = soup(source["url"])
     if x:
@@ -673,7 +680,7 @@ REGRAS ABSOLUTAS (não negocie):
 
 Crie título, resumo e matéria em português do Brasil (700-1200 palavras).
 
-{movimento_musical_placeholder if False else music_hint}FOCO EDITORIAL: dê destaque a LANÇAMENTOS MUSICAIS (singles, álbuns, EPs,
+{music_hint}FOCO EDITORIAL: dê destaque a LANÇAMENTOS MUSICAIS (singles, álbuns, EPs,
 videoclipes, turnês, shows) quando a fonte tratar disso. Cite nome do artista,
 nome da música/álbum, data de lançamento, plataformas e gravadora quando houver.
 
@@ -709,10 +716,8 @@ TEXTO-FONTE (referência interna, NÃO cite nem copie):
             resumo = str(data.get("resumo", "")).strip()
             materia = str(data.get("materia", "")).strip()
 
-            # ===== LIMPEZA DE MENÇÕES À FONTE =====
             titulo, resumo = _clean_titulo_resumo(titulo, resumo)
             materia = _clean_source_mentions(materia)
-            # ======================================
 
             if not titulo or not resumo or len(materia) < 700: continue
             print(f"✓ IA: matéria aprovada ({provider})")
@@ -860,6 +865,7 @@ def html(article, generated, final_image="", image_origin="", seo=None):
 def main():
     print("Fontes: News Gospel + Folha Gospel + Guiame + iGospel")
     print(f"Divulgação: Telegram={'ON' if PROMO_ENABLED and TELEGRAM_BOT_TOKEN else 'OFF'}")
+    print(f"Regra: apenas ano {CURRENT_YEAR} e últimos {MAX_AGE_DAYS} dias | Máx. {MAX_POSTS_PER_RUN} post/execução")
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
     api = blogger()
     old_blog_urls, old_source_urls, existing_titles, posts_count = existing(api)
@@ -882,9 +888,6 @@ def main():
     print(f"Fontes encontradas: " + " | ".join(f"{n}: {c}" for n, c in source_counts.items()))
     print(f"Puladas: {prefiltered}")
 
-    # ============================================================
-    # PRIORIZAÇÃO: LANÇAMENTOS MUSICAIS PRIMEIRO
-    # ============================================================
     for a in candidates:
         a["_music_score"] = _score_music_release(a)
         a["_is_music"] = a["_music_score"] >= 60
@@ -915,6 +918,23 @@ def main():
         if normalized in old_source_urls:
             ignored += 1
             continue
+
+        # ===== DEFESA EXTRA: revalidar data antes de publicar =====
+        adate = article.get("date")
+        if not adate:
+            print(f"⚠ Sem data, ignorando: {article['title'][:60]}")
+            ignored += 1
+            continue
+        if adate.year != CURRENT_YEAR:
+            print(f"⚠ Ano diferente ({adate.year}), ignorando: {article['title'][:60]}")
+            ignored += 1
+            continue
+        age_days = (datetime.now() - adate).total_seconds() / 86400
+        if age_days > MAX_AGE_DAYS or age_days < 0:
+            print(f"⚠ Fora da semana ({age_days:.1f} dias), ignorando: {article['title'][:60]}")
+            ignored += 1
+            continue
+        # =========================================================
 
         is_dup, dup_title = check_blogger_for_duplicate(api, article["title"], existing_titles)
         if is_dup:
@@ -973,5 +993,5 @@ def main():
     print(f"Ignoradas: {ignored}")
     print(f"Falhas: {failed}")
 
-print(f"MAX_AGE_DAYS configurado: {MAX_AGE_DAYS}")
+print(f"MAX_AGE_DAYS configurado: {MAX_AGE_DAYS} (apenas ano {CURRENT_YEAR} e últimos {MAX_AGE_DAYS} dias)")
 main()
